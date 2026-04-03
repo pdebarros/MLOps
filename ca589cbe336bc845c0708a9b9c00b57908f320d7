@@ -1,0 +1,23 @@
+MLOps/Ops_Project/predict.py
+  16476a783774eb3c 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "ca589cbe336bc845c0708a9b9c00b57908f320d7",
+  "prompts": {
+    "16476a783774eb3c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "05826f90-12da-418c-a260-d63cca08bc9b",
+        "model": "default"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 89,
+      "total_deletions": 7,
+      "accepted_lines": 82,
+      "overriden_lines": 0
+    }
+  }
+}
