@@ -10,3 +10,5 @@ langchain-community>=0.4.0
 langchain-experimental>=0.4.0
 langchain-huggingface>=1.2.0
 langchain-google-vertexai>=2.0.0
+google-cloud-aiplatform>=1.71.0
+mlflow>=2.10.0

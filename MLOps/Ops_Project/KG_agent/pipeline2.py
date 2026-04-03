@@ -311,7 +311,7 @@ def merge_results_for_kg(
     return out
 
 
-async def run_pipeline(user_id: str) -> None:
+async def run_pipeline(user_id: str) -> dict[str, Any] | None:
     bucket_name = Config.GCS_BUCKET_NAME
     code_prefix = code_prefix_for_user(user_id)
     model_name = Config.GEMINI_MODEL
@@ -331,7 +331,7 @@ async def run_pipeline(user_id: str) -> None:
     py_blob_names = list_python_blob_names(bucket, code_prefix)
     if not py_blob_names:
         logger.warning("No .py files under gs://%s/%s — exiting.", bucket_name, code_prefix)
-        return
+        return {"status": "skipped", "reason": "no_py_files", "user_id": normalize_user_id(user_id)}
 
     missing = py_files_missing_summaries(bucket, code_prefix, py_blob_names)
 
@@ -343,7 +343,7 @@ async def run_pipeline(user_id: str) -> None:
         cached = load_cached_results_for_kg(bucket, code_prefix, py_blob_names)
         if cached is None:
             logger.error("Could not load cached summaries; aborting KG step.")
-            return
+            return {"status": "error", "reason": "cached_summaries_unusable", "user_id": normalize_user_id(user_id)}
         results = cached
     else:
         logger.info(
@@ -367,7 +367,7 @@ async def run_pipeline(user_id: str) -> None:
         to_generate = load_code_files_for_names(bucket, missing)
         if len(to_generate) != len(missing):
             logger.error("Failed to load some code blobs for summarization.")
-            return
+            return {"status": "error", "reason": "code_load_failed", "user_id": normalize_user_id(user_id)}
 
         fresh_list = await run_parallel_summaries(
             to_generate, model_name, max_parallel, adk_user
@@ -393,6 +393,13 @@ async def run_pipeline(user_id: str) -> None:
     logger.info("Building knowledge graph from %d summary record(s)...", len(results))
     kg_result = build_kg_and_push_to_neo4j(results)
     logger.info("KG step result: %s", kg_result)
+    return {
+        "status": "completed",
+        "user_id": normalize_user_id(user_id),
+        "py_file_count": len(py_blob_names),
+        "summary_records": len(results),
+        "kg_result": kg_result,
+    }
 
 
 def main() -> None:

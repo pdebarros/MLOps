@@ -83,10 +83,10 @@ class Config:
     # --- Neo4j (tools2, tools.py, kg_reconstruct_test) ---
     NEO4J_URI: str = _env_str("NEO4J_URI", "bolt://localhost:7687") or "bolt://localhost:7687"
     NEO4J_USER: str = _env_str("NEO4J_USER", "neo4j") or "neo4j"
-    NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "password") or "cowboy78910"
+    NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "cowboy78910") or "cowboy78910"
 
     # --- GCS + summarization (pipeline2) ---
-    GCS_BUCKET_NAME: str = _env_str("GCS_BUCKET_NAME", "codebases-03-26") or "codebases-03-26"
+    GCS_BUCKET_NAME: str = _env_str("GCS_BUCKET_NAME", "codebases-04-03-26") or "codebases-04-03-26"
     GCS_PREFIX: str | None = _env_str("GCS_PREFIX") or None
     GEMINI_MODEL: str = _env_str("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
     SUMMARY_MAX_PARALLEL: int = _env_int("SUMMARY_MAX_PARALLEL", 4)
