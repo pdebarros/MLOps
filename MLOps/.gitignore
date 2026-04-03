@@ -1,0 +1,14 @@
+.venv/
+**/ .venv/
+.env
+*.env
+bin/
+lib/
+include/
+.DS_Store
+**/ .DS_Store
+__pycache__/
+**/ __pycache__/
+*.pyc
+
+
