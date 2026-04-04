@@ -1,38 +1,20 @@
-# Local-only API: uses Application Default Credentials from the host (mount gcloud config)
-# and Neo4j on the host or another container (see NEO4J_URI).
-#
-# Build (from Ops_Project):
-#   docker build -t kg-api:local .
-#
-# Run (Mac/Windows/Linux — Neo4j on host, default bolt port):
-#   docker run --rm -p 8080:8080 \
-#     -v ~/.config/gcloud:/root/.config/gcloud:ro \
-#     -v "$(pwd)/KG_agent/.env:/app/KG_agent/.env:ro" \
-#     -e NEO4J_URI=bolt://host.docker.internal:7687 \
-#     kg-api:local
-#
-# Linux: if host.docker.internal is missing, add:
-#   --add-host=host.docker.internal:host-gateway
-#
-# ADC: run `gcloud auth application-default login` on the host before `docker run`.
-
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+COPY requirements-server.txt .
+RUN pip install --no-cache-dir -r requirements-server.txt
 
-COPY . .
+COPY server.py .
+COPY config.py .
+COPY KG_agent/ ./KG_agent/
 
 EXPOSE 8080
 
