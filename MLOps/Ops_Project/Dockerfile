@@ -1,21 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-server.txt .
-RUN pip install --no-cache-dir -r requirements-server.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-COPY server.py .
-COPY config.py .
-COPY KG_agent/ ./KG_agent/
-
-EXPOSE 8080
-
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+COPY . .
