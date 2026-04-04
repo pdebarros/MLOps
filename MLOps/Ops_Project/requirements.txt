@@ -1,4 +1,6 @@
 # pipeline.py + tools.py (GCS, Google ADK, Hugging Face, Neo4j)
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
 google-cloud-storage>=2.14.0
 google-adk>=1.0.0
 transformers>=4.36.0
