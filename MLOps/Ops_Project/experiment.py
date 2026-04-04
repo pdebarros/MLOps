@@ -151,7 +151,7 @@ def fetch_latest_scoring_record(user_id: str) -> dict[str, Any] | None:
 
 
 async def run_experiment(user_id: str, experiment_name: str | None) -> None:
-    exp_name = experiment_name or "kg_pipeline_eval"
+    exp_name = experiment_name or "kg_pipeline_eval_fix"
     mlflow.set_experiment(exp_name)
 
     with mlflow.start_run(run_name=f"{user_id}-{uuid.uuid4().hex[:8]}"):
