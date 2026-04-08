@@ -1,3 +1,5 @@
+#functions used in pipeline3.py
+
 """
 Load .py files from GCS under a user prefix, summarize with Gemini (ADK), persist
 summaries to GCS, then build a KG (tools2 + Neo4j).
