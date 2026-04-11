@@ -1,14 +1,15 @@
-"""Tools for eval_agent: Vertex RAG Engine + Neo4j KG neighborhoods."""
+"""Tools for eval_agent: Vertex RAG Engine + Neo4j KG neighborhoods + weak KG student."""
 from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from google.cloud import storage
 from neo4j import GraphDatabase
-
 from .config import (
     Config,
     normalize_user_id,
@@ -61,16 +62,24 @@ def _ensure_vertex_init(corpus_resource: str) -> None:
     logger.info("vertexai.init(project=%s, location=%s)", project, location)
 
 
-def retrieve_from_rag_corpus(query: str) -> str:
+def _rag_top_k_effective(requested: int | None) -> int:
+    base = Config.RAG_TOP_K if requested is None else int(requested)
+    cap = max(1, int(Config.RAG_TOP_K_MAX))
+    return max(1, min(base, cap))
+
+
+def retrieve_from_rag_corpus(query: str, top_k: int | None = None) -> str:
     """
     Retrieve relevant text chunks from the configured Vertex AI RAG Engine corpus.
 
     Use this to ground evaluation: the corpus should contain the same summaries / source
     material the KG was built from. Query with file paths, module names, class names,
-    or concepts you see in the subgraph.
+    or concepts you see in the subgraph. Default retrieval is broader than a typical
+    chat RAG pass; pass ``top_k`` (up to ``RAG_TOP_K_MAX`` from config) for even more chunks.
 
     Args:
         query: Natural language or keyword query for semantic search over the corpus.
+        top_k: Optional chunk count (clamped to ``[1, RAG_TOP_K_MAX]``). Defaults to ``RAG_TOP_K``.
 
     Returns:
         Concatenated retrieved chunks with source URIs, or an error message string.
@@ -91,7 +100,8 @@ def retrieve_from_rag_corpus(query: str) -> str:
         from vertexai import rag
 
         rag_resource = rag.RagResource(rag_corpus=corpus)
-        cfg = rag.RagRetrievalConfig(top_k=Config.RAG_TOP_K)
+        k = _rag_top_k_effective(top_k)
+        cfg = rag.RagRetrievalConfig(top_k=k)
         if Config.RAG_VECTOR_DISTANCE_THRESHOLD is not None:
             cfg.filter = rag.Filter(
                 vector_distance_threshold=Config.RAG_VECTOR_DISTANCE_THRESHOLD
@@ -108,6 +118,93 @@ def retrieve_from_rag_corpus(query: str) -> str:
         return f"RAG retrieval error: {e}"
 
 
+def _neo4j_session_kwargs(neo4j_database: str | None) -> dict[str, Any]:
+    db = (neo4j_database or "").strip()
+    if db:
+        return {"database": db}
+    return {}
+
+
+def query_weak_kg_student(question: str, neo4j_database: str) -> str:
+    """
+    Run the **weak student** from ``eval_agent/model.py``: **Groq** (default: Llama 3.1 8B) proposes
+    **read-only Cypher**, results are executed on Neo4j (schema injected into the prompt), then a
+    second pass answers **only** from query results. Requires ``GROQ_API_KEY`` or ``GROQ_KEY`` in env.
+
+    Use the **same** ``neo4j_database`` string as the Neo4j database name passed to ``weak_model_query``.
+
+    Args:
+        question: Natural-language question to pose to the weak query engine.
+        neo4j_database: Neo4j database name containing that user's property graph (e.g. ``u_123``).
+
+    Returns:
+        The weak model's answer text, or an error string if initialization/query failed.
+    """
+    q = (question or "").strip()
+    db = (neo4j_database or "").strip()
+    if not q:
+        return "Error: empty question."
+    if not db:
+        return "Error: neo4j_database must be non-empty (same as weak model user_id / DB name)."
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from .model import weak_model_query
+    except ImportError as e:
+        return f"Could not import weak_model_query from model: {e}"
+
+    try:
+        return weak_model_query(q, db)
+    except Exception as e:
+        logger.exception("query_weak_kg_student failed")
+        return f"weak_model_query error: {e}"
+
+
+def query_gemini_kg_student(question: str, neo4j_database: str) -> str:
+    """
+    Run the **Gemini Flash multi-step Cypher explorer** from ``eval_agent/model2.py`` (Vertex AI).
+
+    The model issues multiple read-only Cypher queries (schema + property lint in the loop) until it
+    emits a final answer grounded in Neo4j results. **No RAG text or other grounding context** is
+    passed to the student — only the injected graph schema and the question (strict KG-only probe).
+
+    Use this as the **primary student** to score unless you are explicitly comparing against the Groq
+    single-shot baseline (``query_weak_kg_student``).
+
+    Requires the same GCP / Application Default Credentials setup as Vertex RAG (``gcloud auth
+    application-default login`` or workload identity).
+
+    Args:
+        question: Natural-language question (same as for the Groq weak student).
+        neo4j_database: Neo4j database name (same convention as ``weak_model_query`` / ``user_id``).
+
+    Returns:
+        The student's answer text, or an error string if the Gemini/Neo4j path failed.
+    """
+    q = (question or "").strip()
+    db = (neo4j_database or "").strip()
+    if not q:
+        return "Error: empty question."
+    if not db:
+        return "Error: neo4j_database must be non-empty (same as weak model user_id / DB name)."
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from .model2 import gemini_flash_kg_query
+    except ImportError as e:
+        return f"Could not import gemini_flash_kg_query from model2: {e}"
+
+    try:
+        return gemini_flash_kg_query(q, db)
+    except Exception as e:
+        logger.exception("query_gemini_kg_student failed")
+        return f"gemini_flash_kg_query error: {e}"
+
+
 def list_entity_id_samples(limit: int = 15, neo4j_database: str | None = None) -> str:
     """
     List a random sample of Entity node ids from Neo4j to choose neighborhood seeds.
@@ -117,20 +214,17 @@ def list_entity_id_samples(limit: int = 15, neo4j_database: str | None = None) -
 
     Args:
         limit: How many entity ids to return (capped by config).
-        neo4j_database: Optional Neo4j logical database name (multi-DB); omit for server default.
+        neo4j_database: Optional Neo4j database name (multi-DB); must match the graph you evaluate.
 
     Returns:
         Numbered list of entity ids, or an error message.
     """
     cap = max(1, min(int(limit), Config.EVAL_ENTITY_LIST_LIMIT))
-    db = (neo4j_database or "").strip() or None
-    sess_kw: dict[str, Any] = {}
-    if db:
-        sess_kw["database"] = db
+    sk = _neo4j_session_kwargs(neo4j_database)
     try:
         driver = _neo4j_driver()
         try:
-            with driver.session(**sess_kw) as session:
+            with driver.session(**sk) as session:
                 rows = session.run(
                     """
                     MATCH (n:Entity)
@@ -164,16 +258,16 @@ def fetch_neighborhood_from_neo4j(
     Load a k-hop neighborhood around one or more :Entity nodes (same pattern as
     KG_agent/kg_reconstruct_test.py). Use this to inspect the local structure of the KG.
 
-    Provide either `exact_entity_id` (single node id) or `id_substring` (matches
-    Entity.id CONTAINS). When using substring, up to `max_start_nodes` start nodes
-    are used.
+    Provide either `exact_entity_id` (single node id) or `id_substring` (substring
+    match on Entity.id). Matching is **case-insensitive**. When using substring, up to
+    `max_start_nodes` start nodes are used.
 
     Args:
-        exact_entity_id: Exact Entity.id (preferred for a known seed from the list tool).
-        id_substring: Substring match against Entity.id (e.g. a filename fragment).
+        exact_entity_id: Entity.id to match (case-insensitive equality).
+        id_substring: Substring match against Entity.id (case-insensitive).
         k_hops: Graph hop depth 1–10 (default from EVAL_DEFAULT_K).
         max_start_nodes: Max start entities when matching by substring (default EVAL_MAX_STARTS).
-        neo4j_database: Optional Neo4j logical database name (multi-DB); omit for server default.
+        neo4j_database: Optional Neo4j database name; use the same DB as the weak student.
 
     Returns:
         Markdown summary of nodes and typed :REL edges in the neighborhood.
@@ -186,7 +280,6 @@ def fetch_neighborhood_from_neo4j(
     k = int(k_hops) if k_hops is not None else Config.EVAL_DEFAULT_K
     ms = int(max_start_nodes) if max_start_nodes is not None else Config.EVAL_MAX_STARTS
 
-    db = (neo4j_database or "").strip() or None
     try:
         driver = _neo4j_driver()
         try:
@@ -196,7 +289,7 @@ def fetch_neighborhood_from_neo4j(
                 exact_id=exact,
                 k=k,
                 max_starts=ms,
-                database=db,
+                database=(neo4j_database or "").strip() or None,
             )
         finally:
             driver.close()
@@ -266,8 +359,8 @@ def save_scores_to_gcs(
 
     Args:
         user_id: GCS user prefix, e.g. ``u_123`` (must match the session’s user).
-        criterion_1_score: Average score on [0.0, 1.0] for RAG / structural alignment.
-        criterion_2_score: Average score on [0.0, 1.0] for programming-knowledge capture.
+        criterion_1_score: Average on [0.0, 1.0] — weak-student **answer correctness** vs RAG + subgraph ground truth.
+        criterion_2_score: Average on [0.0, 1.0] — **graph-appropriate behavior** (grounding, abstention, no hallucination).
         samples_evaluated: Number of neighborhoods (or samples) those averages are based on.
         per_sample_scores_json: JSON array of per-neighborhood scores, same order as evaluated.
             Each object must include ``criterion_1_score`` and ``criterion_2_score`` (0.0–1.0).

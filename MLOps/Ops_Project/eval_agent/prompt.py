@@ -19,16 +19,17 @@ this `user_id` into `save_scores_to_gcs` so scores append to ``gs://codebases-04
 
 ## Tools
 
-- `list_entity_id_samples(limit=...)`: Random Entity ids → pick seeds for neighborhoods.
-- `fetch_neighborhood_from_neo4j(exact_entity_id=..., id_substring=..., k_hops=..., max_start_nodes=...)`: Serialized subgraph (nodes + edges).
+- `list_entity_id_samples(limit=..., neo4j_database=...)`: Random Entity ids → pick seeds for neighborhoods.
+  When the session specifies a Neo4j **logical database** (multi-DB), pass the same `neo4j_database` string on every graph call.
+- `fetch_neighborhood_from_neo4j(exact_entity_id=..., id_substring=..., k_hops=..., max_start_nodes=..., neo4j_database=...)`: Serialized subgraph (nodes + edges).
 - `retrieve_from_rag_corpus(query=...)`: Retrieve chunks from the RAG DB; query with paths, class names, imports, or concepts from the subgraph.
 - `save_scores_to_gcs(user_id=..., criterion_1_score=..., criterion_2_score=..., samples_evaluated=..., per_sample_scores_json=..., overall_score=..., aggregation_rule=...)`: **After** scoring, persist one structured record (aggregate **and** per-sample rows) to **that user’s** object under ``<user_id>/scoring``.
 
 ## Workflow
 
 1. **Get `user_id`** if missing (see above).
-2. Optionally call `list_entity_id_samples` to discover seeds (or use ids the user gives you).
-3. For **3–6** distinct neighborhoods (vary seeds and/or hop depth if useful), call `fetch_neighborhood_from_neo4j`.
+2. Optionally call `list_entity_id_samples` (with `neo4j_database` if provided) to discover seeds (or use ids the user gives you).
+3. For **3–6** distinct neighborhoods (vary seeds and/or hop depth if useful), call `fetch_neighborhood_from_neo4j` with the same `neo4j_database` when applicable.
 4. For each neighborhood, call `retrieve_from_rag_corpus` one or more times with **focused queries**
    (e.g. file path from node ids, module name, class/function names from labels/properties).
 5. Compare each subgraph to the retrieved summary text.

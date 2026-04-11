@@ -212,6 +212,9 @@ async def summarize_one_file(
     file_name: str,
     file_content: str,
     adk_user: str,
+    *,
+    user_message_prefix: str | None = None,
+    focus_suffix: str = "",
 ) -> dict[str, Any]:
     """Run the summarizer agent for one file via ADK Runner."""
     task_id = str(uuid.uuid4())[:8]
@@ -220,16 +223,26 @@ async def summarize_one_file(
     async with semaphore:
         try:
             session_id = f"sum-{uuid.uuid4().hex}"
+            base_intro = (
+                user_message_prefix
+                if user_message_prefix is not None
+                else (
+                    f"File: {file_name}\n\n"
+                    "Analyze this Python code. Extract classes, "
+                    "dependencies, and logic flow.\n\n"
+                )
+            )
+            if "{file_name}" in base_intro or "{file_content}" in base_intro:
+                body = base_intro.format(file_name=file_name, file_content=file_content)
+            else:
+                body = f"{base_intro}{file_content}"
+            if focus_suffix:
+                body = f"{body}\n{focus_suffix}"
             msg = types.Content(
                 role="user",
                 parts=[
                     types.Part(
-                        text=(
-                            f"File: {file_name}\n\n"
-                            "Analyze this Python code. Extract classes, "
-                            "dependencies, and logic flow.\n\n"
-                            f"{file_content}"
-                        )
+                        text=body,
                     )
                 ],
             )
@@ -258,20 +271,27 @@ async def summarize_one_file(
             }
 
 
+DEFAULT_SUMMARIZER_INSTRUCTION = (
+    "You are a code analyst. Extract classes, dependencies, "
+    "and logic flow from Python source. Respond with a clear, "
+    "structured summary."
+)
+
+
 async def run_parallel_summaries(
     files: List[dict[str, str]],
     model_name: str,
     max_parallel: int,
     adk_user: str,
+    *,
+    summarizer_instruction: str | None = None,
+    user_message_prefix: str | None = None,
+    summary_focus_suffix: str = "",
 ) -> List[dict[str, Any]]:
     summarizer_agent = Agent(
         name="code_summarizer",
         model=model_name,
-        instruction=(
-            "You are a code analyst. Extract classes, dependencies, "
-            "and logic flow from Python source. Respond with a clear, "
-            "structured summary."
-        ),
+        instruction=(summarizer_instruction or DEFAULT_SUMMARIZER_INSTRUCTION),
     )
     runner = Runner(
         app_name="kg-pipeline",
@@ -287,6 +307,8 @@ async def run_parallel_summaries(
             item["file_name"],
             item["file_content"],
             adk_user,
+            user_message_prefix=user_message_prefix,
+            focus_suffix=summary_focus_suffix,
         )
         for item in files
     ]

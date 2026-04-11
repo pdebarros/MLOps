@@ -22,6 +22,8 @@ def fetch_subgraph_k_hops(
     """
     Return (nodes, edges) for all :Entity nodes reachable within k hops on :REL
     from any start Entity matching needle or exact_id.
+
+    Matching on ``Entity.id`` is **case-insensitive** (exact and substring).
     """
     k = max(1, min(int(k), 10))
     max_starts = max(1, int(max_starts))
@@ -29,14 +31,14 @@ def fetch_subgraph_k_hops(
     if exact_id is None and not needle:
         raise ValueError("Provide needle or exact_id")
 
-    _sess_kw: dict[str, Any] = {}
-    if database and str(database).strip():
-        _sess_kw["database"] = str(database).strip()
+    _sk: dict[str, Any] = {}
+    if database:
+        _sk["database"] = database
 
     cypher_nodes = f"""
     MATCH (start:Entity)
-    WHERE ($exact_id IS NOT NULL AND start.id = $exact_id)
-       OR ($exact_id IS NULL AND start.id CONTAINS $needle)
+    WHERE ($exact_id IS NOT NULL AND toLower(toString(start.id)) = toLower(toString($exact_id)))
+       OR ($exact_id IS NULL AND toLower(toString(start.id)) CONTAINS toLower(toString($needle)))
     WITH start LIMIT $max_starts
     MATCH (start)-[:REL*0..{k}]-(n:Entity)
     WITH collect(DISTINCT start) + collect(DISTINCT n) AS bag
@@ -44,7 +46,7 @@ def fetch_subgraph_k_hops(
     RETURN collect(DISTINCT node) AS nodes
     """
 
-    with driver.session(**_sess_kw) as session:
+    with driver.session(**_sk) as session:
         row = session.run(
             cypher_nodes,
             exact_id=exact_id,
@@ -77,7 +79,7 @@ def fetch_subgraph_k_hops(
     if not node_ids:
         return [], []
 
-    with driver.session(**_sess_kw) as session:
+    with driver.session(**_sk) as session:
         er = session.run(
             """
             MATCH (a:Entity)-[r:REL]->(b:Entity)

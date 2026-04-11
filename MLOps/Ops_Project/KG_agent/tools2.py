@@ -184,28 +184,41 @@ def _get_neo4j_driver():
     return _neo4j_driver
 
 
-def _persist_graph_documents(graph_documents: list) -> tuple[int, int]:
+def _persist_graph_documents(
+    graph_documents: list,
+    *,
+    extra_node_props: dict[str, Any] | None = None,
+    database: str | None = None,
+) -> tuple[int, int]:
     """
     Persist LangChain GraphDocuments to Neo4j without APOC.
     Uses a stable :Entity label and :REL relationship with a typed property.
+
+    ``database`` — Neo4j 4+ logical database name; if None, use the server default.
     """
     driver = _get_neo4j_driver()
     nodes_written = 0
     edges_written = 0
-    with driver.session() as session:
+    session_kwargs: dict[str, Any] = {}
+    if database:
+        session_kwargs["database"] = database
+    with driver.session(**session_kwargs) as session:
         for gd in graph_documents:
             for node in gd.nodes:
                 node_id = str(node.id)
                 node_type = str(node.type or "Entity")
                 props = dict(node.properties or {})
                 props["kind"] = node_type
+                merged_props = dict(props)
+                if extra_node_props:
+                    merged_props.update(extra_node_props)
                 session.run(
                     """
                     MERGE (n:Entity {id: $id})
                     SET n += $props
                     """,
                     id=node_id,
-                    props=props,
+                    props=merged_props,
                 )
                 nodes_written += 1
 
@@ -231,14 +244,18 @@ def _persist_graph_documents(graph_documents: list) -> tuple[int, int]:
     return nodes_written, edges_written
 
 
-def _pick_completed_docs(results: list) -> List[Document]:
+def _pick_completed_docs(
+    results: list,
+    max_doc_chars: int | None = None,
+) -> List[Document]:
+    cap = KG_MAX_DOC_CHARS if max_doc_chars is None else max_doc_chars
     docs: List[Document] = []
     for r in results:
         if r.get("status") == "completed" and r.get("summary"):
             file_name = r.get("file") or "unknown_file"
             summary = str(r["summary"])
-            if KG_MAX_DOC_CHARS > 0 and len(summary) > KG_MAX_DOC_CHARS:
-                summary = summary[:KG_MAX_DOC_CHARS]
+            if cap > 0 and len(summary) > cap:
+                summary = summary[:cap]
             docs.append(
                 Document(
                     page_content=f"FILE: {file_name}\nSUMMARY:\n{summary}",
@@ -282,16 +299,33 @@ def _to_batch_documents(chunks: List[List[Document]]) -> List[Document]:
     return batch_docs
 
 
-def build_kg_and_push_to_neo4j(results: list) -> dict[str, Any]:
+def build_kg_and_push_to_neo4j(
+    results: list,
+    *,
+    kg_batch_size: int | None = None,
+    kg_batch_overlap: int | None = None,
+    kg_max_doc_chars: int | None = None,
+    extra_entity_props: dict[str, Any] | None = None,
+    neo4j_database: str | None = None,
+) -> dict[str, Any]:
     """
     Convert code summaries into GraphDocuments via LLMGraphTransformer (Vertex Gemini by default,
     or local Hugging Face if KG_GRAPH_BACKEND=huggingface), then persist into Neo4j.
+
+    Optional overrides (used by pipeline3 dual-track builds):
+      kg_batch_size / kg_batch_overlap — multi-file batching for cross-file edges
+      kg_max_doc_chars — per-summary cap when building Documents
+      extra_entity_props — merged onto each :Entity (e.g. {\"kg_track\": \"structural\"})
+      neo4j_database — Neo4j 4+ database name (default server DB if omitted)
     """
-    docs = _pick_completed_docs(results)
+    bs = KG_BATCH_SIZE if kg_batch_size is None else kg_batch_size
+    bo = KG_BATCH_OVERLAP if kg_batch_overlap is None else kg_batch_overlap
+
+    docs = _pick_completed_docs(results, max_doc_chars=kg_max_doc_chars)
     if not docs:
         return {"status": "error", "message": "No successful summaries found."}
 
-    chunks = _chunk_docs(docs, KG_BATCH_SIZE, KG_BATCH_OVERLAP)
+    chunks = _chunk_docs(docs, bs, bo)
     batch_docs = _to_batch_documents(chunks)
 
     transformer = _get_graph_transformer()
@@ -314,7 +348,11 @@ def build_kg_and_push_to_neo4j(results: list) -> dict[str, Any]:
         return {"status": "error", "message": "No graph documents produced."}
 
     try:
-        nodes_written, edges_written = _persist_graph_documents(graph_documents)
+        nodes_written, edges_written = _persist_graph_documents(
+            graph_documents,
+            extra_node_props=extra_entity_props,
+            database=neo4j_database,
+        )
     except Exception as e:
         logger.error("Neo4j write failed: %s", e)
         return {"status": "neo4j_error", "message": str(e)}

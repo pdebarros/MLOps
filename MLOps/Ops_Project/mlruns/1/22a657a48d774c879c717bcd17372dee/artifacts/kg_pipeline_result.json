@@ -1,0 +1,28 @@
+{
+  "status": "completed",
+  "user_id": "u_123",
+  "py_file_count": 18,
+  "structural": {
+    "track": "structural",
+    "status": "completed",
+    "summary_records": 18,
+    "kg_result": {
+      "status": "success",
+      "files_processed": 18,
+      "chunks_processed": 9,
+      "graph_documents": 9,
+      "nodes_written": 311,
+      "edges_written": 423
+    }
+  },
+  "technical": {
+    "track": "technical",
+    "status": "completed",
+    "summary_records": 18,
+    "kg_result": {
+      "status": "neo4j_error",
+      "message": "Failed to write data to connection IPv4Address(('localhost', 7687)) (ResolvedIPv4Address(('127.0.0.1', 7687)))"
+    }
+  },
+  "neo4j_database": "gof0n6"
+}
