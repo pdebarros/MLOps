@@ -107,12 +107,21 @@ def serialize_subgraph(
     *,
     title: str,
 ) -> str:
+    excluded_props = {
+        "embedding",
+        "embedding_text",
+        "embedding_text_hash",
+        "embedding_model",
+    }
     lines = [
         f"## Subgraph: {title}",
         f"### Nodes ({len(nodes)})",
     ]
     for n in nodes:
-        extra = n.get("properties") or {}
+        raw_extra = n.get("properties") or {}
+        # Embedding vectors and embedding-helper fields can explode context size;
+        # keep retrieval metadata out of the serialized QA context.
+        extra = {k: v for k, v in raw_extra.items() if k not in excluded_props}
         brief = ", ".join(f"{k}={v!r}" for k, v in list(extra.items())[:8])
         if len(extra) > 8:
             brief += ", ..."

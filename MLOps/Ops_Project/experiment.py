@@ -1,7 +1,8 @@
 """
 MLflow experiment: build a knowledge graph (KG_agent pipeline3) into a **fresh Neo4j database**
 per run (random 6-char name, e.g. ``axd56f``), then run eval_agent (ADK) against that database. Logs summarizer + KG graph model
-metadata, pipeline output, Neo4j counts, eval transcript, and scoring metrics from GCS.
+metadata, pipeline output, Neo4j counts (plus per relationship-type and entity-kind
+counts), eval transcript, and scoring metrics from GCS.
 
 Run from Ops_Project (repo root for imports):
 
@@ -164,8 +165,21 @@ async def run_eval_agent_session(user_id: str, neo4j_database: str) -> str:
     return text or ""
 
 
-def neo4j_counts_for_user_prefix(user_id: str, neo4j_database: str) -> tuple[int, int]:
-    """Count :Entity and :REL where entity ids start with ``<user_id>/`` in the given database."""
+def _safe_mlflow_metric_suffix(raw: str, *, max_len: int = 96) -> str:
+    """Metric keys must be stable; strip characters MLflow / UIs handle poorly."""
+    s = re.sub(r"[^a-zA-Z0-9_]+", "_", (raw or "unknown").strip())
+    s = re.sub(r"_+", "_", s).strip("_")
+    return (s or "unknown")[:max_len]
+
+
+def neo4j_graph_metadata_for_user_prefix(
+    user_id: str, neo4j_database: str
+) -> dict[str, Any]:
+    """
+    Aggregate :Entity / :REL stats for ids under ``<user_id>/`` in the given logical database.
+
+    Returns entity and edge totals, counts per ``r.type`` on :REL, and per ``n.kind`` on :Entity.
+    """
     from config import Config
     from neo4j import GraphDatabase
 
@@ -175,6 +189,12 @@ def neo4j_counts_for_user_prefix(user_id: str, neo4j_database: str) -> tuple[int
         Config.NEO4J_URI,
         auth=(Config.NEO4J_USER, Config.NEO4J_PASSWORD),
     )
+    out: dict[str, Any] = {
+        "entity_nodes": 0,
+        "rel_edges": 0,
+        "relationship_type_counts": {},
+        "entity_kind_counts": {},
+    }
     try:
         with driver.session(database=neo4j_database) as session:
             nrec = session.run(
@@ -189,11 +209,58 @@ def neo4j_counts_for_user_prefix(user_id: str, neo4j_database: str) -> tuple[int
                 """,
                 p=prefix,
             ).single()
-            nodes = int(nrec["c"]) if nrec else 0
-            edges = int(erec["c"]) if erec else 0
+            out["entity_nodes"] = int(nrec["c"]) if nrec else 0
+            out["rel_edges"] = int(erec["c"]) if erec else 0
+
+            for row in session.run(
+                """
+                MATCH (a:Entity)-[r:REL]->(b:Entity)
+                WHERE a.id STARTS WITH $p AND b.id STARTS WITH $p
+                RETURN coalesce(r.type, '(null)') AS rel_type, count(*) AS c
+                """,
+                p=prefix,
+            ):
+                key = str(row["rel_type"])
+                out["relationship_type_counts"][key] = int(row["c"])
+
+            for row in session.run(
+                """
+                MATCH (n:Entity)
+                WHERE n.id STARTS WITH $p
+                RETURN coalesce(n.kind, '(null)') AS kind, count(*) AS c
+                """,
+                p=prefix,
+            ):
+                key = str(row["kind"])
+                out["entity_kind_counts"][key] = int(row["c"])
     finally:
         driver.close()
-    return nodes, edges
+    return out
+
+
+def neo4j_counts_for_user_prefix(user_id: str, neo4j_database: str) -> tuple[int, int]:
+    """Count :Entity and :REL where entity ids start with ``<user_id>/`` in the given database."""
+    meta = neo4j_graph_metadata_for_user_prefix(user_id, neo4j_database)
+    return int(meta["entity_nodes"]), int(meta["rel_edges"])
+
+
+def log_neo4j_schema_to_mlflow(meta: dict[str, Any]) -> None:
+    """Log KG shape (rel types, entity kinds) as JSON artifact and per-key metrics."""
+    mlflow.log_dict(
+        {
+            "relationship_type_counts": meta.get("relationship_type_counts") or {},
+            "entity_kind_counts": meta.get("entity_kind_counts") or {},
+        },
+        "neo4j_graph_schema_counts.json",
+    )
+    rel_counts: dict[str, Any] = meta.get("relationship_type_counts") or {}
+    for rel_type, count in sorted(rel_counts.items(), key=lambda x: (-x[1], x[0])):
+        suffix = _safe_mlflow_metric_suffix(rel_type)
+        mlflow.log_metric(f"neo4j_rel_type_{suffix}", float(count))
+    kind_counts: dict[str, Any] = meta.get("entity_kind_counts") or {}
+    for kind, count in sorted(kind_counts.items(), key=lambda x: (-x[1], x[0])):
+        suffix = _safe_mlflow_metric_suffix(kind)
+        mlflow.log_metric(f"neo4j_entity_kind_{suffix}", float(count))
 
 
 def fetch_latest_scoring_record(user_id: str) -> dict[str, Any] | None:
@@ -290,11 +357,16 @@ async def run_experiment(user_id: str, experiment_name: str | None) -> None:
         else:
             mlflow.log_param("pipeline_status", "none")
 
-        # --- 2. Neo4j counts (per user id prefix, experiment database) ---
+        # --- 2. Neo4j counts + rel/kind distributions (per user id prefix, experiment DB) ---
         try:
-            n_nodes, n_edges = neo4j_counts_for_user_prefix(user_id, neo4j_db)
-            mlflow.log_metric("neo4j_entity_nodes_for_user", float(n_nodes))
-            mlflow.log_metric("neo4j_rel_edges_for_user", float(n_edges))
+            graph_meta = neo4j_graph_metadata_for_user_prefix(user_id, neo4j_db)
+            mlflow.log_metric(
+                "neo4j_entity_nodes_for_user", float(graph_meta["entity_nodes"])
+            )
+            mlflow.log_metric(
+                "neo4j_rel_edges_for_user", float(graph_meta["rel_edges"])
+            )
+            log_neo4j_schema_to_mlflow(graph_meta)
         except Exception as e:
             logger.exception("Neo4j count failed: %s", e)
             mlflow.log_param("neo4j_count_error", str(e)[:500])

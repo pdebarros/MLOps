@@ -100,7 +100,7 @@ class Config:
     VERTEX_GEMINI_MODEL: str = (
         _env_str("VERTEX_GEMINI_MODEL")
         or _env_str("GEMINI_GRAPH_MODEL")
-        or "gemini-2.5-flash"
+        or "gemini-2.5-pro"
     )
     GOOGLE_CLOUD_PROJECT: str | None = google_cloud_project()
     VERTEX_LOCATION: str = (

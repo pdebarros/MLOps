@@ -15,3 +15,9 @@ langchain-google-vertexai>=2.0.0
 google-cloud-aiplatform>=1.71.0
 mlflow>=2.10.0
 openai>=1.40.0
+neo4j-graphrag>=0.6.0
+
+# analyze_kg_metadata.py (optional)
+pandas>=2.0.0
+scipy>=1.11.0
+matplotlib>=3.8.0

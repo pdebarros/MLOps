@@ -1,0 +1,32 @@
+{
+  "status": "completed",
+  "user_id": "u_123",
+  "py_file_count": 18,
+  "structural": {
+    "track": "structural",
+    "status": "completed",
+    "summary_records": 18,
+    "kg_result": {
+      "status": "success",
+      "files_processed": 18,
+      "chunks_processed": 9,
+      "graph_documents": 9,
+      "nodes_written": 250,
+      "edges_written": 313
+    }
+  },
+  "technical": {
+    "track": "technical",
+    "status": "completed",
+    "summary_records": 18,
+    "kg_result": {
+      "status": "success",
+      "files_processed": 18,
+      "chunks_processed": 18,
+      "graph_documents": 18,
+      "nodes_written": 390,
+      "edges_written": 388
+    }
+  },
+  "neo4j_database": "mi77dh"
+}

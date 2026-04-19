@@ -134,6 +134,21 @@ class Config:
     GEMINI_CYPHER_TRACE_LOG: str | None = _env_str("GEMINI_CYPHER_TRACE_LOG")
     GEMINI_CYPHER_TRACE_MAX_TEXT: int = _env_int("GEMINI_CYPHER_TRACE_MAX_TEXT", 8000)
 
+    # Gemini GraphRAG student retrieval mode (eval_agent/model2.py)
+    GEMINI_STUDENT_RETRIEVAL_MODE: str = (
+        _env_str("GEMINI_STUDENT_RETRIEVAL_MODE", "embedding_graphrag")
+        or "embedding_graphrag"
+    ).strip().lower()
+    GEMINI_GRAPHRAG_TOP_K: int = _env_int("GEMINI_GRAPHRAG_TOP_K", 8)
+    GEMINI_GRAPHRAG_VECTOR_INDEX: str = (
+        _env_str("GEMINI_GRAPHRAG_VECTOR_INDEX", "entity_embedding_index")
+        or "entity_embedding_index"
+    )
+    GEMINI_GRAPHRAG_EMBED_MODEL: str = (
+        _env_str("GEMINI_GRAPHRAG_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        or "sentence-transformers/all-MiniLM-L6-v2"
+    )
+
 
 config = Config()
 

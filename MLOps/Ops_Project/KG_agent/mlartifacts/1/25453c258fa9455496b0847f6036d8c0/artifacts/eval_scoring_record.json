@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-04-18T19:00:51.620073+00:00",
+  "user_id": "u_123",
+  "criterion_1_score": 0.9,
+  "criterion_2_score": 0.87,
+  "overall_score": 0.89,
+  "samples_evaluated": 3,
+  "aggregation_rule": "unweighted mean of 3 neighborhood scores",
+  "per_sample_scores": [
+    {
+      "sample_index": 1,
+      "seed_entity_id": "U_123/Gru_Model.Py",
+      "criterion_1_score": 0.8,
+      "criterion_2_score": 0.7
+    },
+    {
+      "sample_index": 2,
+      "seed_entity_id": "Vertex_Ai_Train.Py",
+      "criterion_1_score": 0.9,
+      "criterion_2_score": 0.9
+    },
+    {
+      "sample_index": 3,
+      "seed_entity_id": "U_123/Find_Worker_Results.Py",
+      "criterion_1_score": 1.0,
+      "criterion_2_score": 1.0
+    }
+  ]
+}

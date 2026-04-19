@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-04-18T19:26:41.735780+00:00",
+  "user_id": "u_123",
+  "criterion_1_score": 0.53,
+  "criterion_2_score": 0.55,
+  "overall_score": 0.54,
+  "samples_evaluated": 4,
+  "aggregation_rule": "unweighted mean of 4 neighborhood scores",
+  "per_sample_scores": [
+    {
+      "sample_index": 1,
+      "seed_entity_id": "Grumode",
+      "criterion_1_score": 0.6,
+      "criterion_2_score": 0.7
+    },
+    {
+      "sample_index": 2,
+      "seed_entity_id": "Labelencoder",
+      "criterion_1_score": 0.1,
+      "criterion_2_score": 0.1
+    },
+    {
+      "sample_index": 3,
+      "seed_entity_id": "Typing",
+      "criterion_1_score": 0.5,
+      "criterion_2_score": 0.5
+    },
+    {
+      "sample_index": 4,
+      "seed_entity_id": "Nn.Module",
+      "criterion_1_score": 0.9,
+      "criterion_2_score": 0.9
+    }
+  ]
+}

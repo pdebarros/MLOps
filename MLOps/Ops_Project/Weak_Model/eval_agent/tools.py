@@ -164,11 +164,12 @@ def query_weak_kg_student(question: str, neo4j_database: str) -> str:
 
 def query_gemini_kg_student(question: str, neo4j_database: str) -> str:
     """
-    Run the **Gemini Flash multi-step Cypher explorer** from ``eval_agent/model2.py`` (Vertex AI).
+    Run the **Gemini Flash GraphRAG student** from ``eval_agent/model2.py`` (Vertex AI).
 
-    The model issues multiple read-only Cypher queries (schema + property lint in the loop) until it
-    emits a final answer grounded in Neo4j results. **No RAG text or other grounding context** is
-    passed to the student — only the injected graph schema and the question (strict KG-only probe).
+    This path does **not** rely on model-generated Cypher. It uses a GraphRAG retrieval pipeline:
+    embedding/vector retrieval (``neo4j_graphrag``) when configured, with keyword seed fallback,
+    then bounded k-hop neighborhood expansion and grounded answer synthesis over the serialized
+    subgraph context.
 
     Use this as the **primary student** to score unless you are explicitly comparing against the Groq
     single-shot baseline (``query_weak_kg_student``).
