@@ -21,3 +21,7 @@ neo4j-graphrag>=0.6.0
 pandas>=2.0.0
 scipy>=1.11.0
 matplotlib>=3.8.0
+
+# tests (tests/test_pipeline3.py)
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
