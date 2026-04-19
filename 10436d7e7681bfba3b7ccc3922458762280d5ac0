@@ -1,0 +1,29 @@
+MLOps/Ops_Project/requirements.txt
+  ea9b180d5fd21cc4 23-27
+MLOps/Ops_Project/tests/test_pipeline3.py
+  ea9b180d5fd21cc4 1-206
+MLOps/Ops_Project/tests/conftest.py
+  ea9b180d5fd21cc4 1-38
+MLOps/Ops_Project/pytest.ini
+  ea9b180d5fd21cc4 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "10436d7e7681bfba3b7ccc3922458762280d5ac0",
+  "prompts": {
+    "ea9b180d5fd21cc4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "11409b3b-75b7-43af-ae40-fb783094dfc9",
+        "model": "default"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 520,
+      "total_deletions": 67,
+      "accepted_lines": 253,
+      "overriden_lines": 0
+    }
+  }
+}
