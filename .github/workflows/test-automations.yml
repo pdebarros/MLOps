@@ -1,4 +1,4 @@
-  name: KG Agent Test Automations
+name: KG Agent Test Automations
 
 on:
   push:
