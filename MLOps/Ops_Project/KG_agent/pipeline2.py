@@ -206,6 +206,17 @@ async def _final_text_from_events(events_source) -> str | None:
     return last
 
 
+def _estimate_tokens_approx(text: str | None) -> int:
+    """
+    Lightweight token estimate for cost trending when provider usage is unavailable.
+    Approximation: ~4 chars/token for English/code-like text.
+    """
+    if not text:
+        return 0
+    s = str(text)
+    return max(1, (len(s) + 3) // 4)
+
+
 async def summarize_one_file(
     runner: Runner,
     semaphore: asyncio.Semaphore,
@@ -255,11 +266,19 @@ async def summarize_one_file(
             )
             if not text:
                 raise RuntimeError("No model text in response stream")
+            prompt_tokens_est = _estimate_tokens_approx(body)
+            completion_tokens_est = _estimate_tokens_approx(text)
             log.info("SUCCESS: Summary generated for '%s'", file_name)
             return {
                 "file": file_name,
                 "summary": text,
                 "status": "completed",
+                "token_usage": {
+                    "method": "estimated_chars_div_4",
+                    "prompt_tokens_est": prompt_tokens_est,
+                    "completion_tokens_est": completion_tokens_est,
+                    "total_tokens_est": prompt_tokens_est + completion_tokens_est,
+                },
             }
         except Exception as e:
             log.error("FAILURE: '%s' failed. Error: %s", file_name, e)

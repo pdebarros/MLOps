@@ -240,6 +240,14 @@ async def run_single_track(
             user_message_prefix=user_message_prefix,
             summary_focus_suffix=summary_focus_suffix,
         )
+        summary_prompt_tokens_est = 0
+        summary_completion_tokens_est = 0
+        for r in fresh_list:
+            tu = r.get("token_usage")
+            if not isinstance(tu, dict):
+                continue
+            summary_prompt_tokens_est += int(tu.get("prompt_tokens_est") or 0)
+            summary_completion_tokens_est += int(tu.get("completion_tokens_est") or 0)
         fresh_by_file = {r["file"]: r for r in fresh_list}
 
         for name, res in fresh_by_file.items():
@@ -258,6 +266,25 @@ async def run_single_track(
             logger.info("Wrote [%s] summary to gs://%s/%s", track_key, bucket_name, sp)
 
         results = merge_results_for_kg(py_blob_names, cached_by_file, fresh_by_file)
+        summary_usage = {
+            "model": model_name,
+            "method": "estimated_chars_div_4",
+            "files_summarized_fresh": len(fresh_list),
+            "prompt_tokens_est": int(summary_prompt_tokens_est),
+            "completion_tokens_est": int(summary_completion_tokens_est),
+            "total_tokens_est": int(
+                summary_prompt_tokens_est + summary_completion_tokens_est
+            ),
+        }
+    if not missing:
+        summary_usage = {
+            "model": model_name,
+            "method": "estimated_chars_div_4",
+            "files_summarized_fresh": 0,
+            "prompt_tokens_est": 0,
+            "completion_tokens_est": 0,
+            "total_tokens_est": 0,
+        }
 
     logger.info("[%s] Building knowledge graph (%d summaries)...", track_key, len(results))
     kg_result = build_kg_and_push_to_neo4j(
@@ -274,6 +301,7 @@ async def run_single_track(
         "track": track_key,
         "status": "completed",
         "summary_records": len(results),
+        "summary_token_usage": summary_usage,
         "kg_result": kg_result,
     }
 

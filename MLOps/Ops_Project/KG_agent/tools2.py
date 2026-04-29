@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, List
 
 from config import Config
@@ -40,6 +41,20 @@ KG_MAX_DOC_CHARS = Config.KG_MAX_DOC_CHARS
 KG_BATCH_SIZE = Config.KG_BATCH_SIZE
 KG_BATCH_OVERLAP = Config.KG_BATCH_OVERLAP
 
+
+def _estimate_tokens_approx(text: str | None) -> int:
+    """Lightweight token estimate (~4 chars/token) for cost trending."""
+    if not text:
+        return 0
+    s = str(text)
+    return max(1, (len(s) + 3) // 4)
+
+
+def _graph_model_name_for_backend() -> str:
+    if KG_GRAPH_BACKEND in ("huggingface", "hf", "local"):
+        return HF_GRAPH_MODEL
+    return VERTEX_GEMINI_MODEL
+
 # Optional schema constraints to stabilize Neo4j structure
 ALLOWED_NODE_TYPES = list(Config.ALLOWED_NODE_TYPES)
 ALLOWED_REL_TYPES = list(Config.ALLOWED_REL_TYPES)
@@ -48,6 +63,23 @@ _hf_llm = None
 _vertex_llm = None
 _graph_transformer: LLMGraphTransformer | None = None
 _neo4j_driver = None
+
+
+def _sanitize_tenant_label(uid: str) -> str:
+    """
+    Convert a user_id into a valid Neo4j label segment.
+
+    Rules:
+      - Replace any character outside [A-Za-z0-9_] with '_'
+      - Prefix with 'U' when the result starts with a digit
+      - Prepend 'User_' so every tenant label has the form  User_<safe_uid>
+
+    Example: 'u_123' → 'User_u_123',  '99foo' → 'User_U99foo'
+    """
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", uid)
+    if safe and safe[0].isdigit():
+        safe = "U" + safe
+    return f"User_{safe}"
 
 
 def _get_vertex_llm() -> BaseLanguageModel:
@@ -189,12 +221,25 @@ def _persist_graph_documents(
     *,
     extra_node_props: dict[str, Any] | None = None,
     database: str | None = None,
+    tenant_id: str | None = None,
 ) -> tuple[int, int]:
     """
     Persist LangChain GraphDocuments to Neo4j without APOC.
-    Uses a stable :Entity label and :REL relationship with a typed property.
 
-    ``database`` — Neo4j 4+ logical database name; if None, use the server default.
+    Multi-tenancy (AuraDB / single-database):
+      When ``tenant_id`` is provided, two isolation mechanisms are applied:
+
+      1. **Label-Based** — each node gets an extra ``:`User_<uid>`` label so
+         Neo4j index scans jump directly to that tenant's sub-graph without
+         touching other tenants' nodes.
+
+      2. **Property-Based** — every node and relationship carries
+         ``tenantId = <uid>`` so GraphRAG Cypher filters stay unambiguous.
+
+      MERGE keys include ``tenantId``, ensuring that two tenants whose files
+      share the same entity name are stored as distinct nodes.
+
+    ``database`` — Neo4j 4+ logical database name; ``None`` uses server default.
     """
     driver = _get_neo4j_driver()
     nodes_written = 0
@@ -202,6 +247,11 @@ def _persist_graph_documents(
     session_kwargs: dict[str, Any] = {}
     if database:
         session_kwargs["database"] = database
+
+    # _sanitize_tenant_label produces only [A-Za-z0-9_] so backtick injection
+    # is not possible; the f-string dynamic label is therefore safe.
+    user_label = _sanitize_tenant_label(tenant_id) if tenant_id else None
+
     with driver.session(**session_kwargs) as session:
         for gd in graph_documents:
             for node in gd.nodes:
@@ -212,14 +262,27 @@ def _persist_graph_documents(
                 merged_props = dict(props)
                 if extra_node_props:
                     merged_props.update(extra_node_props)
-                session.run(
-                    """
-                    MERGE (n:Entity {id: $id})
-                    SET n += $props
-                    """,
-                    id=node_id,
-                    props=merged_props,
-                )
+
+                if tenant_id:
+                    merged_props["tenantId"] = tenant_id
+                    session.run(
+                        f"""
+                        MERGE (n:Entity:`{user_label}` {{id: $id, tenantId: $tenant_id}})
+                        SET n += $props
+                        """,
+                        id=node_id,
+                        tenant_id=tenant_id,
+                        props=merged_props,
+                    )
+                else:
+                    session.run(
+                        """
+                        MERGE (n:Entity {id: $id})
+                        SET n += $props
+                        """,
+                        id=node_id,
+                        props=merged_props,
+                    )
                 nodes_written += 1
 
             for rel in gd.relationships:
@@ -228,18 +291,35 @@ def _persist_graph_documents(
                 rel_type = str(rel.type or "RELATED_TO")
                 rel_props = dict(rel.properties or {})
                 rel_props["type"] = rel_type
-                session.run(
-                    """
-                    MATCH (a:Entity {id: $src_id})
-                    MATCH (b:Entity {id: $dst_id})
-                    MERGE (a)-[r:REL {type: $rel_type}]->(b)
-                    SET r += $rel_props
-                    """,
-                    src_id=src_id,
-                    dst_id=dst_id,
-                    rel_type=rel_type,
-                    rel_props=rel_props,
-                )
+
+                if tenant_id:
+                    rel_props["tenantId"] = tenant_id
+                    session.run(
+                        f"""
+                        MATCH (a:Entity:`{user_label}` {{id: $src_id, tenantId: $tenant_id}})
+                        MATCH (b:Entity:`{user_label}` {{id: $dst_id, tenantId: $tenant_id}})
+                        MERGE (a)-[r:REL {{type: $rel_type, tenantId: $tenant_id}}]->(b)
+                        SET r += $rel_props
+                        """,
+                        src_id=src_id,
+                        dst_id=dst_id,
+                        rel_type=rel_type,
+                        tenant_id=tenant_id,
+                        rel_props=rel_props,
+                    )
+                else:
+                    session.run(
+                        """
+                        MATCH (a:Entity {id: $src_id})
+                        MATCH (b:Entity {id: $dst_id})
+                        MERGE (a)-[r:REL {type: $rel_type}]->(b)
+                        SET r += $rel_props
+                        """,
+                        src_id=src_id,
+                        dst_id=dst_id,
+                        rel_type=rel_type,
+                        rel_props=rel_props,
+                    )
                 edges_written += 1
     return nodes_written, edges_written
 
@@ -307,16 +387,19 @@ def build_kg_and_push_to_neo4j(
     kg_max_doc_chars: int | None = None,
     extra_entity_props: dict[str, Any] | None = None,
     neo4j_database: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Convert code summaries into GraphDocuments via LLMGraphTransformer (Vertex Gemini by default,
     or local Hugging Face if KG_GRAPH_BACKEND=huggingface), then persist into Neo4j.
 
-    Optional overrides (used by pipeline3 dual-track builds):
+    Optional overrides:
       kg_batch_size / kg_batch_overlap — multi-file batching for cross-file edges
       kg_max_doc_chars — per-summary cap when building Documents
       extra_entity_props — merged onto each :Entity (e.g. {\"kg_track\": \"structural\"})
       neo4j_database — Neo4j 4+ database name (default server DB if omitted)
+      tenant_id — when set, enables AuraDB logical multi-tenancy via label + property
+                  isolation (see _persist_graph_documents for details)
     """
     bs = KG_BATCH_SIZE if kg_batch_size is None else kg_batch_size
     bo = KG_BATCH_OVERLAP if kg_batch_overlap is None else kg_batch_overlap
@@ -327,6 +410,7 @@ def build_kg_and_push_to_neo4j(
 
     chunks = _chunk_docs(docs, bs, bo)
     batch_docs = _to_batch_documents(chunks)
+    input_tokens_est = sum(_estimate_tokens_approx(d.page_content) for d in batch_docs)
 
     transformer = _get_graph_transformer()
 
@@ -347,11 +431,17 @@ def build_kg_and_push_to_neo4j(
     if not graph_documents:
         return {"status": "error", "message": "No graph documents produced."}
 
+    # Heuristic output-token estimate from extracted graph size.
+    out_nodes = sum(len(getattr(gd, "nodes", []) or []) for gd in graph_documents)
+    out_edges = sum(len(getattr(gd, "relationships", []) or []) for gd in graph_documents)
+    output_tokens_est = max(0, (out_nodes * 12) + (out_edges * 8))
+
     try:
         nodes_written, edges_written = _persist_graph_documents(
             graph_documents,
             extra_node_props=extra_entity_props,
             database=neo4j_database,
+            tenant_id=tenant_id,
         )
     except Exception as e:
         logger.error("Neo4j write failed: %s", e)
@@ -364,4 +454,12 @@ def build_kg_and_push_to_neo4j(
         "graph_documents": len(graph_documents),
         "nodes_written": nodes_written,
         "edges_written": edges_written,
+        "token_usage": {
+            "model": _graph_model_name_for_backend(),
+            "backend": KG_GRAPH_BACKEND,
+            "method": "estimated_input_chars_div_4_plus_graph_size_heuristic",
+            "input_tokens_est": int(input_tokens_est),
+            "output_tokens_est": int(output_tokens_est),
+            "total_tokens_est": int(input_tokens_est + output_tokens_est),
+        },
     }
