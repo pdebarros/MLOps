@@ -1,0 +1,8 @@
+section,name_or_type,value_or_count,detail1,detail2
+summary,neo4j_database,yq3p7n,,
+summary,id_filter,(entire database),,
+summary,entity_nodes,0,,
+summary,rel_edges_directed,0,,
+summary,isolated_entity_count,0,,
+summary,legacy_code_entity_nodes,0,,
+summary,legacy_relation_edges,0,,

@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-04-24T06:49:11.545723+00:00",
+  "user_id": "u_123",
+  "criterion_1_score": 0.95,
+  "criterion_2_score": 0.91,
+  "overall_score": 0.93,
+  "samples_evaluated": 5,
+  "aggregation_rule": "unweighted mean of 5 neighborhood scores",
+  "per_sample_scores": [
+    {
+      "sample_index": 1,
+      "seed_entity_id": "U_123/Streaming_Predict.Py",
+      "criterion_1_score": 0.9,
+      "criterion_2_score": 0.9
+    },
+    {
+      "sample_index": 2,
+      "seed_entity_id": "Train_Test_Split",
+      "criterion_1_score": 1.0,
+      "criterion_2_score": 0.8
+    },
+    {
+      "sample_index": 3,
+      "seed_entity_id": "Mean_Squared_Error",
+      "criterion_1_score": 1.0,
+      "criterion_2_score": 0.95
+    },
+    {
+      "sample_index": 4,
+      "seed_entity_id": "Mixture Model",
+      "criterion_1_score": 0.85,
+      "criterion_2_score": 0.9
+    },
+    {
+      "sample_index": 5,
+      "seed_entity_id": "Client",
+      "criterion_1_score": 1.0,
+      "criterion_2_score": 1.0
+    }
+  ]
+}

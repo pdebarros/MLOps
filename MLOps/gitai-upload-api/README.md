@@ -1,82 +1,258 @@
-# git-ai Upload API (BigQuery Auth + GCS)
+# git-ai Upload API
 
-FastAPI service for:
-- user registration/login backed by BigQuery table
-- authenticated Python-change ingest from `tracking_ui.py`
-- storing each ingest payload in GCS under user-scoped paths
+FastAPI service that powers the gitai desktop app:
 
-## 1) Create BigQuery dataset/table (CLI)
+- User registration / login backed by BigQuery
+- Authenticated Python file ingest + GCS storage
+- Triggers the KG pipeline (multi-tenant AuraDB) after every file submission
+
+## Architecture
+
+```
+gitai app ──► Cloud Run (upload API) ──► GCS  (raw Python files)
+                                    └──► Cloud Run Job (kg-pipeline) ──► AuraDB
+```
+
+The **upload API** is a small, stateless FastAPI service (no KG deps). After each file upload it creates a **Cloud Run Job execution** that runs `prod_pipeline.py` with the user's ID. Job status can be polled via `/kg/jobs/{job_id}`.
+
+---
+
+## 1. BigQuery — create the users table
 
 ```bash
 export PROJECT_ID="your-gcp-project-id"
 export DATASET="gitai"
-export TABLE="users"
 
 bq --project_id="$PROJECT_ID" mk --dataset "$PROJECT_ID:$DATASET"
 
-bq --project_id="$PROJECT_ID" mk --table "$PROJECT_ID:$DATASET.$TABLE" \
-user_id:STRING,email:STRING,password_hash:STRING,created_at:TIMESTAMP,last_login_at:TIMESTAMP,is_active:BOOL,session_token_hash:STRING,session_expires_at:TIMESTAMP,total_upload_requests:INT64,total_uploaded_lines:INT64
+bq --project_id="$PROJECT_ID" mk --table "$PROJECT_ID:$DATASET.users" \
+  user_id:STRING,email:STRING,password_hash:STRING,created_at:TIMESTAMP,\
+last_login_at:TIMESTAMP,is_active:BOOL,session_token_hash:STRING,\
+session_expires_at:TIMESTAMP,total_upload_requests:INT64,total_uploaded_lines:INT64
 ```
 
-Optional dedupe/cleanup (manual):
-```bash
-bq --project_id="$PROJECT_ID" query --use_legacy_sql=false \
-'SELECT email, COUNT(*) c FROM `'$PROJECT_ID'.'$DATASET'.'$TABLE'` GROUP BY email HAVING c > 1'
-```
+---
 
-## 2) Local run
+## 2. Local development
 
 ```bash
 cd gitai-upload-api
 cp .env.example .env
-# Edit .env with API_KEY, GCS_BUCKET, BQ_PROJECT_ID, etc.
+# Fill in .env (see section 5 for required values)
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-## 3) Cloud Run deploy
+For local dev the KG pipeline runs as a background subprocess.  
+Set `KG_PIPELINE_PYTHON` and `KG_PIPELINE_SCRIPT` in `.env`.
+
+---
+
+## 3. Cloud Run deployment
+
+### 3a. IAM service accounts
+
+Create (or reuse) two service accounts:
+
+| Account | Purpose |
+|---|---|
+| `gitai-run-sa` | Runs the upload API Cloud Run service |
+| `gitai-kg-sa` | Runs the KG pipeline Cloud Run Job |
 
 ```bash
-export PROJECT_ID="your-gcp-project-id"
+export PROJECT_ID="your-project"
 export REGION="us-central1"
-export SERVICE="gitai-upload-api"
 
-gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE
-gcloud run deploy $SERVICE \
-  --image gcr.io/$PROJECT_ID/$SERVICE \
+# Upload API service account
+gcloud iam service-accounts create gitai-run-sa \
+  --display-name="gitai Upload API"
+
+# KG pipeline service account
+gcloud iam service-accounts create gitai-kg-sa \
+  --display-name="gitai KG Pipeline Job"
+
+# Roles for upload API SA
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataEditor"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.jobUser"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/run.developer"   # needed to trigger Cloud Run Job executions
+
+# Roles for KG pipeline SA
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-kg-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-kg-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+### 3b. Build + push the upload API image
+
+```bash
+cd gitai-upload-api
+
+gcloud builds submit \
+  --tag gcr.io/$PROJECT_ID/gitai-upload-api \
+  --project $PROJECT_ID
+```
+
+### 3c. Deploy the upload API to Cloud Run
+
+```bash
+export CORS_ORIGINS="tauri://localhost,https://app.example.com"
+export API_KEY="your-secret-key"           # shared with the gitai app
+export GCS_BUCKET="your-gitai-diff-bucket" # for Python diffs (ingest/python)
+export PYTHON_FILES_BUCKET="codebases-04-03-26"  # for full files (ingest/python-file)
+export KG_JOB_NAME="kg-pipeline-job"       # Cloud Run Job name (created in step 3e)
+
+gcloud run deploy gitai-upload-api \
+  --image gcr.io/$PROJECT_ID/gitai-upload-api \
   --region $REGION \
   --platform managed \
   --allow-unauthenticated \
-  --set-env-vars API_KEY=your-global-api-key,GCS_BUCKET=your-bucket,GCS_OBJECT_PREFIX=gitai-python,BQ_PROJECT_ID=$PROJECT_ID,BQ_DATASET=gitai,BQ_USERS_TABLE=users,SESSION_TTL_HOURS=24 \
-  --service-account YOUR_RUN_SA@$PROJECT_ID.iam.gserviceaccount.com
+  --min-instances 0 \
+  --max-instances 10 \
+  --timeout 60s \
+  --service-account gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com \
+  --set-env-vars \
+API_KEY=$API_KEY,\
+GCS_BUCKET=$GCS_BUCKET,\
+PYTHON_FILES_BUCKET=$PYTHON_FILES_BUCKET,\
+BQ_PROJECT_ID=$PROJECT_ID,\
+BQ_DATASET=gitai,\
+BQ_USERS_TABLE=users,\
+SESSION_TTL_HOURS=24,\
+CORS_ALLOW_ORIGINS=$CORS_ORIGINS,\
+CLOUD_RUN_REGION=$REGION,\
+CLOUD_RUN_KG_JOB_NAME=$KG_JOB_NAME
 ```
 
-Grant service account access:
-- BigQuery: `roles/bigquery.dataEditor` on dataset + `roles/bigquery.jobUser`
-- GCS bucket: `roles/storage.objectAdmin` (or narrower create/get)
+### 3d. Build + push the KG pipeline Job image
 
-## 4) API
+```bash
+cd ../Ops_Project/KG_agent
 
-- `POST /auth/register` -> creates user row (generated `user_id`), returns session token
-- `POST /auth/login` -> verifies password, returns session token
-- `POST /ingest/python` -> requires headers:
-  - `X-User-Email`
-  - `X-Session-Token`
-  - `X-API-Key` (only if API_KEY is configured server-side)
+gcloud builds submit \
+  --tag gcr.io/$PROJECT_ID/kg-pipeline-job \
+  --project $PROJECT_ID
+```
 
-Payload shape is `PythonIngest` in `app/main.py`.
+### 3e. Create the KG pipeline Cloud Run Job
 
-## 5) Troubleshooting
+Secrets (Neo4j password, API keys) are best stored in Secret Manager and mounted as env vars.
+For a quick start you can pass them directly with `--set-env-vars`:
 
-### “streaming buffer” UPDATE errors
-User rows must be inserted with **SQL `INSERT` (DML)**, not the streaming `insert_rows_json` API, or immediate `UPDATE` for sessions can fail. This service uses DML `INSERT` for new registrations.
+```bash
+export NEO4J_URI="neo4j+s://XXXX.databases.neo4j.io"
+export NEO4J_USER="neo4j"
+export NEO4J_PASSWORD="your-neo4j-password"
+export GCS_BUCKET_NAME="codebases-04-03-26"
+export GOOGLE_CLOUD_PROJECT=$PROJECT_ID
+export GOOGLE_CLOUD_REGION=$REGION
+export GEMINI_MODEL="gemini-2.0-flash"   # or whichever model you use
+export VERTEX_GEMINI_MODEL="gemini-2.0-flash"
 
-If you **already** inserted test users via streaming, those rows can block `UPDATE` until BigQuery commits them (often up to ~90 minutes). Fix: use a **new** `users` table name in `.env` (`BQ_USERS_TABLE=users_v2`) and recreate the schema, or wait and retry.
+gcloud run jobs create kg-pipeline-job \
+  --image gcr.io/$PROJECT_ID/kg-pipeline-job \
+  --region $REGION \
+  --service-account gitai-kg-sa@$PROJECT_ID.iam.gserviceaccount.com \
+  --task-timeout 3600s \
+  --max-retries 1 \
+  --set-env-vars \
+NEO4J_URI=$NEO4J_URI,\
+NEO4J_USER=$NEO4J_USER,\
+NEO4J_PASSWORD=$NEO4J_PASSWORD,\
+GCS_BUCKET_NAME=$GCS_BUCKET_NAME,\
+GOOGLE_CLOUD_PROJECT=$GOOGLE_CLOUD_PROJECT,\
+GOOGLE_CLOUD_REGION=$GOOGLE_CLOUD_REGION,\
+GEMINI_MODEL=$GEMINI_MODEL,\
+VERTEX_GEMINI_MODEL=$VERTEX_GEMINI_MODEL
+```
 
-### ADC “no quota project” warning (local dev)
+To update an existing job's env vars:
+```bash
+gcloud run jobs update kg-pipeline-job \
+  --region $REGION \
+  --update-env-vars NEO4J_PASSWORD=new-password
+```
+
+### 3f. Update the gitai app to point to Cloud Run
+
+In the gitai desktop app settings, replace `http://localhost:8080` with the Cloud Run service URL:
+
+```
+https://gitai-upload-api-XXXX-uc.a.run.app
+```
+
+---
+
+## 4. Automated deploys with Cloud Build
+
+Commit `.cloudbuild.yaml` to your repo and connect a Cloud Build trigger. The trigger substitution values map to the env vars in step 3c.
+
+---
+
+## 5. Environment variable reference
+
+| Variable | Required | Description |
+|---|---|---|
+| `API_KEY` | No | Global API gate key (shared with app) |
+| `GCS_BUCKET` | Yes | Bucket for Python diff payloads |
+| `PYTHON_FILES_BUCKET` | Yes | Bucket for full Python source files (must match KG pipeline) |
+| `BQ_PROJECT_ID` | Yes | GCP project for BigQuery |
+| `BQ_DATASET` | No | BigQuery dataset name (default: `gitai`) |
+| `BQ_USERS_TABLE` | No | Users table name (default: `users`) |
+| `SESSION_TTL_HOURS` | No | Login token lifetime (default: `24`) |
+| `CORS_ALLOW_ORIGINS` | No | Comma-separated allowed origins |
+| `CLOUD_RUN_KG_JOB_NAME` | Yes (prod) | Name of the KG pipeline Cloud Run Job |
+| `CLOUD_RUN_REGION` | No | Region of the Job (default: `us-central1`) |
+| `CLOUD_RUN_PROJECT` | No | GCP project for the Job (default: `BQ_PROJECT_ID`) |
+| `KG_PIPELINE_SCRIPT` | Local only | Path to `prod_pipeline.py` |
+| `KG_PIPELINE_PYTHON` | Local only | Python interpreter with KG deps |
+| `KG_PIPELINE_DATABASE` | No | Neo4j database name (leave blank for AuraDB default) |
+| `KG_STRUCTURAL_BATCH_SIZE` | No | Structural KG batch size override |
+| `KG_TECHNICAL_BATCH_SIZE` | No | Technical KG batch size override |
+
+---
+
+## 6. API endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/auth/register` | App key | Create account |
+| `POST` | `/auth/login` | App key | Get session token |
+| `POST` | `/ingest/python` | Session | Upload Python diffs (line tracking) |
+| `POST` | `/ingest/python-file` | Session | Upload full Python files, triggers KG pipeline |
+| `GET` | `/kg/jobs/{job_id}` | Session | Poll KG pipeline job status |
+| `GET` | `/health` | — | Health check |
+
+---
+
+## 7. Troubleshooting
+
+**BigQuery streaming buffer UPDATE errors**  
+User rows must use SQL DML `INSERT`, not the streaming API, or immediate `UPDATE` can fail. This service uses DML. If you already have streaming-inserted rows, wait ~90 minutes or use a new `BQ_USERS_TABLE` name.
+
+**ADC "no quota project" warning**  
 ```bash
 gcloud auth application-default login
-gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+gcloud auth application-default set-quota-project $PROJECT_ID
 ```
 
-Setting `BQ_PROJECT_ID` in `.env` also sets `GOOGLE_CLOUD_PROJECT` for client libraries when the app loads.
+**Cloud Run Job not found**  
+Ensure the Job was created in the same `CLOUD_RUN_REGION` and that the upload API's service account has `roles/run.developer` on the project.
+
+**KG pipeline `skipped` (all summaries already ingested)**  
+This is correct incremental behavior. Upload new `.py` files or clear the GCS summary cache to force re-ingestion:
+```bash
+gsutil rm -r gs://BUCKET/USER_ID/summaries_structural/
+gsutil rm -r gs://BUCKET/USER_ID/summaries_technical/
+```

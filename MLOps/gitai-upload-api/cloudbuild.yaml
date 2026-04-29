@@ -1,0 +1,68 @@
+# Cloud Build config for gitai-upload-api.
+# Builds the upload-API image and deploys it to Cloud Run.
+#
+# Required substitutions (set in Cloud Build trigger or pass with --substitutions):
+#   _REGION          : e.g. us-central1
+#   _SERVICE         : e.g. gitai-upload-api
+#   _SERVICE_ACCOUNT : e.g. gitai-run-sa@PROJECT.iam.gserviceaccount.com
+#   _API_KEY         : secret app API key (use Secret Manager in production)
+#   _GCS_BUCKET      : GCS bucket for incremental Python uploads
+#   _PYTHON_FILES_BUCKET : GCS bucket for KG pipeline source files
+#   _BQ_PROJECT_ID   : BigQuery project ID
+#   _CORS_ORIGINS    : comma-separated allowed origins (e.g. tauri://localhost,https://app.example.com)
+#   _CLOUD_RUN_KG_JOB_NAME : name of the pre-created KG pipeline Cloud Run Job
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE: gitai-upload-api
+  _SERVICE_ACCOUNT: ""
+  _API_KEY: ""
+  _GCS_BUCKET: ""
+  _PYTHON_FILES_BUCKET: ""
+  _BQ_PROJECT_ID: ""
+  _CORS_ORIGINS: "tauri://localhost"
+  _CLOUD_RUN_KG_JOB_NAME: ""
+
+steps:
+  # ── 1. Build the container image ─────────────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+      - -t
+      - gcr.io/$PROJECT_ID/${_SERVICE}:latest
+      - .
+
+  # ── 2. Push to Container Registry ────────────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - gcr.io/$PROJECT_ID/${_SERVICE}
+
+  # ── 3. Deploy to Cloud Run ────────────────────────────────────────────────
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --min-instances=0
+      - --max-instances=10
+      - --concurrency=80
+      - --timeout=60s
+      - --service-account=${_SERVICE_ACCOUNT}
+      - >-
+        --set-env-vars=API_KEY=${_API_KEY},GCS_BUCKET=${_GCS_BUCKET},PYTHON_FILES_BUCKET=${_PYTHON_FILES_BUCKET},BQ_PROJECT_ID=${_BQ_PROJECT_ID},BQ_DATASET=gitai,BQ_USERS_TABLE=users,SESSION_TTL_HOURS=24,CORS_ALLOW_ORIGINS=${_CORS_ORIGINS},CLOUD_RUN_REGION=${_REGION},CLOUD_RUN_KG_JOB_NAME=${_CLOUD_RUN_KG_JOB_NAME}
+
+images:
+  - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA
+  - gcr.io/$PROJECT_ID/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

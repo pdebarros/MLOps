@@ -12,3 +12,8 @@ mlruns
 *.md
 .DS_Store
 *.ipynb_checkpoints
+
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc

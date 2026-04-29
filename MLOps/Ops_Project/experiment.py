@@ -325,6 +325,73 @@ def _log_pipeline3_metrics(pipeline_out: dict[str, Any]) -> None:
                 f"kg_{track_key}_transform_status",
                 str(kr.get("status", "")),
             )
+            ktu = kr.get("token_usage")
+            if isinstance(ktu, dict):
+                mlflow.log_param(
+                    f"kg_{track_key}_model",
+                    str(ktu.get("model", "")),
+                )
+                mlflow.log_param(
+                    f"kg_{track_key}_token_method",
+                    str(ktu.get("method", "")),
+                )
+                mlflow.log_metric(
+                    f"kg_{track_key}_input_tokens_est",
+                    float(ktu.get("input_tokens_est", 0) or 0),
+                )
+                mlflow.log_metric(
+                    f"kg_{track_key}_output_tokens_est",
+                    float(ktu.get("output_tokens_est", 0) or 0),
+                )
+                mlflow.log_metric(
+                    f"kg_{track_key}_total_tokens_est",
+                    float(ktu.get("total_tokens_est", 0) or 0),
+                )
+
+        stu = tr.get("summary_token_usage")
+        if isinstance(stu, dict):
+            mlflow.log_param(
+                f"summary_{track_key}_model",
+                str(stu.get("model", "")),
+            )
+            mlflow.log_param(
+                f"summary_{track_key}_token_method",
+                str(stu.get("method", "")),
+            )
+            mlflow.log_metric(
+                f"summary_{track_key}_prompt_tokens_est",
+                float(stu.get("prompt_tokens_est", 0) or 0),
+            )
+            mlflow.log_metric(
+                f"summary_{track_key}_completion_tokens_est",
+                float(stu.get("completion_tokens_est", 0) or 0),
+            )
+            mlflow.log_metric(
+                f"summary_{track_key}_total_tokens_est",
+                float(stu.get("total_tokens_est", 0) or 0),
+            )
+
+    # Run-level totals for quick cost estimation dashboards.
+    total_summary_tokens_est = 0.0
+    total_kg_tokens_est = 0.0
+    for track_key in ("structural", "technical"):
+        tr = pipeline_out.get(track_key)
+        if not isinstance(tr, dict):
+            continue
+        stu = tr.get("summary_token_usage")
+        if isinstance(stu, dict):
+            total_summary_tokens_est += float(stu.get("total_tokens_est", 0) or 0)
+        kr = tr.get("kg_result")
+        if isinstance(kr, dict):
+            ktu = kr.get("token_usage")
+            if isinstance(ktu, dict):
+                total_kg_tokens_est += float(ktu.get("total_tokens_est", 0) or 0)
+    mlflow.log_metric("summary_total_tokens_est", total_summary_tokens_est)
+    mlflow.log_metric("kg_total_tokens_est", total_kg_tokens_est)
+    mlflow.log_metric(
+        "experiment_total_tokens_est",
+        total_summary_tokens_est + total_kg_tokens_est,
+    )
 
 
 async def run_experiment(user_id: str, experiment_name: str | None) -> None:

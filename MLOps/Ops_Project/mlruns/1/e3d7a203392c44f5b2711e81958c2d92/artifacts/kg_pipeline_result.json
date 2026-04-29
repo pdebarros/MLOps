@@ -1,0 +1,64 @@
+{
+  "status": "completed",
+  "user_id": "u_123",
+  "py_file_count": 18,
+  "structural": {
+    "track": "structural",
+    "status": "completed",
+    "summary_records": 18,
+    "summary_token_usage": {
+      "model": "gemini-2.5-flash",
+      "method": "estimated_chars_div_4",
+      "files_summarized_fresh": 0,
+      "prompt_tokens_est": 0,
+      "completion_tokens_est": 0,
+      "total_tokens_est": 0
+    },
+    "kg_result": {
+      "status": "success",
+      "files_processed": 18,
+      "chunks_processed": 9,
+      "graph_documents": 9,
+      "nodes_written": 260,
+      "edges_written": 320,
+      "token_usage": {
+        "model": "gemini-2.5-pro",
+        "backend": "vertex",
+        "method": "estimated_input_chars_div_4_plus_graph_size_heuristic",
+        "input_tokens_est": 13994,
+        "output_tokens_est": 5680,
+        "total_tokens_est": 19674
+      }
+    }
+  },
+  "technical": {
+    "track": "technical",
+    "status": "completed",
+    "summary_records": 18,
+    "summary_token_usage": {
+      "model": "gemini-2.5-flash",
+      "method": "estimated_chars_div_4",
+      "files_summarized_fresh": 0,
+      "prompt_tokens_est": 0,
+      "completion_tokens_est": 0,
+      "total_tokens_est": 0
+    },
+    "kg_result": {
+      "status": "success",
+      "files_processed": 18,
+      "chunks_processed": 18,
+      "graph_documents": 18,
+      "nodes_written": 391,
+      "edges_written": 406,
+      "token_usage": {
+        "model": "gemini-2.5-pro",
+        "backend": "vertex",
+        "method": "estimated_input_chars_div_4_plus_graph_size_heuristic",
+        "input_tokens_est": 12792,
+        "output_tokens_est": 7940,
+        "total_tokens_est": 20732
+      }
+    }
+  },
+  "neo4j_database": "cn7phx"
+}
