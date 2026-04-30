@@ -1,0 +1,23 @@
+MLOps/Ops_Project/KG_agent/experience_pipeline.py
+  a60526827c0408e4 1-998
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c30338b56a0e2945c275c6e2ba892662ef5c7ca9",
+  "prompts": {
+    "a60526827c0408e4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0941067-6013-42e7-ad21-59b3ce252850",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 2680,
+      "total_deletions": 2,
+      "accepted_lines": 998,
+      "overriden_lines": 0
+    }
+  }
+}
