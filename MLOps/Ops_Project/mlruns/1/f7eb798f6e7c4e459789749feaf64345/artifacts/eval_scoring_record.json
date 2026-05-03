@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-04-28T04:03:59.798560+00:00",
+  "user_id": "user_2",
+  "criterion_1_score": 0.87,
+  "criterion_2_score": 0.78,
+  "overall_score": 0.83,
+  "samples_evaluated": 3,
+  "aggregation_rule": "Unweighted mean of 3 neighborhood scores.",
+  "per_sample_scores": [
+    {
+      "sample_index": 1,
+      "seed_entity_id": "User_2/Prob2.Py",
+      "criterion_1_score": 0.8,
+      "criterion_2_score": 0.7,
+      "notes": "RAG unavailable, scored on structural consistency."
+    },
+    {
+      "sample_index": 2,
+      "seed_entity_id": "Max_Sum",
+      "criterion_1_score": 0.9,
+      "criterion_2_score": 0.8,
+      "notes": "RAG unavailable, scored on structural consistency."
+    },
+    {
+      "sample_index": 3,
+      "seed_entity_id": "K",
+      "criterion_1_score": 0.9,
+      "criterion_2_score": 0.85,
+      "notes": "RAG unavailable, scored on structural consistency."
+    }
+  ]
+}

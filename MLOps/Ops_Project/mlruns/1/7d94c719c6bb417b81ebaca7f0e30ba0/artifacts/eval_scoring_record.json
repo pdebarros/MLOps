@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-04-28T03:26:53.011109+00:00",
+  "user_id": "user_1",
+  "criterion_1_score": 0.77,
+  "criterion_2_score": 0.6,
+  "overall_score": 0.69,
+  "samples_evaluated": 3,
+  "aggregation_rule": "Unweighted mean of 3 neighborhood scores. RAG was unavailable, so scores are based on graph consistency.",
+  "per_sample_scores": [
+    {
+      "sample_index": 1,
+      "seed_entity_id": "User_1/Prob1.Py",
+      "criterion_1_score": 0.7,
+      "criterion_2_score": 0.6,
+      "notes": "Graph structure appears logical for a Python file with functions and variables."
+    },
+    {
+      "sample_index": 2,
+      "seed_entity_id": "Right",
+      "criterion_1_score": 0.8,
+      "criterion_2_score": 0.6,
+      "notes": "Variable correctly linked to its defining/using function."
+    },
+    {
+      "sample_index": 3,
+      "seed_entity_id": "Nums",
+      "criterion_1_score": 0.8,
+      "criterion_2_score": 0.6,
+      "notes": "Variable correctly linked to its using function."
+    }
+  ]
+}
