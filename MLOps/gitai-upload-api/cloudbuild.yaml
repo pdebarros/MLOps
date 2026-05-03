@@ -11,6 +11,9 @@
 #   _BQ_PROJECT_ID   : BigQuery project ID
 #   _CORS_ORIGINS    : comma-separated allowed origins (e.g. tauri://localhost,https://app.example.com)
 #   _CLOUD_RUN_KG_JOB_NAME : name of the pre-created KG pipeline Cloud Run Job
+#   _VERTEX_PROJECT  : GCP project for Vertex RAG (defaults to _BQ_PROJECT_ID if blank)
+#   _VERTEX_LOCATION : Vertex region for per-user RAG corpora (default us-central1)
+#   _RAG_CORPUS_REQUIRED_ON_REGISTER : "1" to fail /auth/register on Vertex errors (default blank = lenient)
 
 substitutions:
   _REGION: us-central1
@@ -22,6 +25,9 @@ substitutions:
   _BQ_PROJECT_ID: ""
   _CORS_ORIGINS: "tauri://localhost"
   _CLOUD_RUN_KG_JOB_NAME: ""
+  _VERTEX_PROJECT: ""
+  _VERTEX_LOCATION: "us-central1"
+  _RAG_CORPUS_REQUIRED_ON_REGISTER: ""
 
 steps:
   # ── 1. Build the container image ─────────────────────────────────────────
@@ -58,7 +64,7 @@ steps:
       - --timeout=60s
       - --service-account=${_SERVICE_ACCOUNT}
       - >-
-        --set-env-vars=API_KEY=${_API_KEY},GCS_BUCKET=${_GCS_BUCKET},PYTHON_FILES_BUCKET=${_PYTHON_FILES_BUCKET},BQ_PROJECT_ID=${_BQ_PROJECT_ID},BQ_DATASET=gitai,BQ_USERS_TABLE=users,SESSION_TTL_HOURS=24,CORS_ALLOW_ORIGINS=${_CORS_ORIGINS},CLOUD_RUN_REGION=${_REGION},CLOUD_RUN_KG_JOB_NAME=${_CLOUD_RUN_KG_JOB_NAME}
+        --set-env-vars=API_KEY=${_API_KEY},GCS_BUCKET=${_GCS_BUCKET},PYTHON_FILES_BUCKET=${_PYTHON_FILES_BUCKET},BQ_PROJECT_ID=${_BQ_PROJECT_ID},BQ_DATASET=gitai,BQ_USERS_TABLE=users,SESSION_TTL_HOURS=24,CORS_ALLOW_ORIGINS=${_CORS_ORIGINS},CLOUD_RUN_REGION=${_REGION},CLOUD_RUN_KG_JOB_NAME=${_CLOUD_RUN_KG_JOB_NAME},VERTEX_PROJECT=${_VERTEX_PROJECT},VERTEX_LOCATION=${_VERTEX_LOCATION},RAG_CORPUS_REQUIRED_ON_REGISTER=${_RAG_CORPUS_REQUIRED_ON_REGISTER}
 
 images:
   - gcr.io/$PROJECT_ID/${_SERVICE}:$COMMIT_SHA

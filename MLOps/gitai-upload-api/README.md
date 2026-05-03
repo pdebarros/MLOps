@@ -28,7 +28,30 @@ bq --project_id="$PROJECT_ID" mk --dataset "$PROJECT_ID:$DATASET"
 bq --project_id="$PROJECT_ID" mk --table "$PROJECT_ID:$DATASET.users" \
   user_id:STRING,email:STRING,password_hash:STRING,created_at:TIMESTAMP,\
 last_login_at:TIMESTAMP,is_active:BOOL,session_token_hash:STRING,\
-session_expires_at:TIMESTAMP,total_upload_requests:INT64,total_uploaded_lines:INT64
+session_expires_at:TIMESTAMP,total_upload_requests:INT64,total_uploaded_lines:INT64,\
+rag_corpus_id:STRING
+```
+
+`rag_corpus_id` stores the per-user Vertex AI RAG Engine corpus **numeric id**
+(the last segment of the resource name) that's created at registration.
+Reconstruct the full resource name when calling Vertex as
+`projects/<VERTEX_PROJECT>/locations/<VERTEX_LOCATION>/ragCorpora/<id>`.
+
+To migrate an existing table that doesn't have the column yet, add it:
+
+```bash
+bq --project_id="$PROJECT_ID" update \
+  --schema=user_id:STRING,email:STRING,password_hash:STRING,created_at:TIMESTAMP,last_login_at:TIMESTAMP,is_active:BOOL,session_token_hash:STRING,session_expires_at:TIMESTAMP,total_upload_requests:INT64,total_uploaded_lines:INT64,rag_corpus_id:STRING \
+  "$PROJECT_ID:$DATASET.users"
+```
+
+If you previously added a `rag_corpus_name STRING` column from an earlier
+revision of this guide, rename it in place (BigQuery supports column
+renames):
+
+```bash
+bq query --use_legacy_sql=false --project_id="$PROJECT_ID" \
+  "ALTER TABLE \`$PROJECT_ID.$DATASET.users\` RENAME COLUMN rag_corpus_name TO rag_corpus_id"
 ```
 
 ---
@@ -84,6 +107,9 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/run.developer"   # needed to trigger Cloud Run Job executions
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:gitai-run-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"  # needed to create per-user Vertex RAG corpora
 
 # Roles for KG pipeline SA
 gcloud projects add-iam-policy-binding $PROJECT_ID \
@@ -220,6 +246,10 @@ Commit `.cloudbuild.yaml` to your repo and connect a Cloud Build trigger. The tr
 | `KG_PIPELINE_DATABASE` | No | Neo4j database name (leave blank for AuraDB default) |
 | `KG_STRUCTURAL_BATCH_SIZE` | No | Structural KG batch size override |
 | `KG_TECHNICAL_BATCH_SIZE` | No | Technical KG batch size override |
+| `VERTEX_PROJECT` | No | GCP project for Vertex RAG Engine (defaults to `BQ_PROJECT_ID`) |
+| `VERTEX_LOCATION` | No | Vertex region for the per-user RAG corpus (default: `us-central1`) |
+| `RAG_EMBEDDING_PUBLISHER_MODEL` | No | Embedding model resource (e.g. `publishers/google/models/text-embedding-005`) |
+| `RAG_CORPUS_REQUIRED_ON_REGISTER` | No | If `1/true`, registration fails when the corpus cannot be created (default: lenient) |
 
 ---
 
