@@ -1,0 +1,67 @@
+MLOps/Ops_Project/KG_agent/graphRAG/config.py
+  a60526827c0408e4 1-55,61-106
+  8d58d070479e1300 56-60
+MLOps/Ops_Project/KG_agent/graphRAG/tools.py
+  a60526827c0408e4 1-69,74-991
+  8d58d070479e1300 70-73
+MLOps/Ops_Project/KG_agent/graphRAG/prompt.py
+  2f909d4d931a81d3 120-145
+  a60526827c0408e4 1-119,146
+MLOps/Ops_Project/KG_agent/graphRAG/__init__.py
+  a60526827c0408e4 1-4
+MLOps/Ops_Project/KG_agent/graphRAG/requirements.txt
+  8d58d070479e1300 1-7
+MLOps/Ops_Project/KG_agent/graphRAG/deploy.py
+  8d58d070479e1300 1-321
+MLOps/Ops_Project/KG_agent/graphRAG/agent.py
+  a60526827c0408e4 1-43
+MLOps/Ops_Project/KG_agent/graphRAG/README.md
+  a60526827c0408e4 1-169
+  8d58d070479e1300 170-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "974fa92a979c6543028e652dd44b253b0efcf581",
+  "prompts": {
+    "2f909d4d931a81d3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0074838c-4f72-4409-a9da-4452847507e0",
+        "model": "default"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 31,
+      "total_deletions": 6,
+      "accepted_lines": 26,
+      "overriden_lines": 0
+    },
+    "8d58d070479e1300": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "15dd5d50-157c-4b22-94da-981e0c8761d0",
+        "model": "default"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 1061,
+      "total_deletions": 42,
+      "accepted_lines": 1025,
+      "overriden_lines": 0
+    },
+    "a60526827c0408e4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0941067-6013-42e7-ad21-59b3ce252850",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "pdebarros",
+      "messages": [],
+      "total_additions": 1778,
+      "total_deletions": 124,
+      "accepted_lines": 1650,
+      "overriden_lines": 0
+    }
+  }
+}
