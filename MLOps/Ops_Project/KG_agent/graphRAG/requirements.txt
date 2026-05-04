@@ -1,0 +1,7 @@
+# Minimal deps for graphRAG on Vertex AI Agent Engine (Agent Runtime).
+# Pin ranges loosely; tighten in production if needed.
+google-adk>=1.0.0
+google-cloud-aiplatform[agent_engines,adk]>=1.112.0
+langchain-google-vertexai>=2.0.0
+neo4j>=5.0.0
+python-dotenv>=1.0.0
