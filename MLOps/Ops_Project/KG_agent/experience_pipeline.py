@@ -266,6 +266,12 @@ DEFAULT_EXPERIENCE_OVERLAP = _env_int("EXP_EXPERIENCE_KG_OVERLAP", 0)
 DEFAULT_EXPERIENCE_MAX_DOC_CHARS = _env_int("EXP_EXPERIENCE_MAX_DOC_CHARS", 2500)
 DEFAULT_MAX_SOURCE_CHARS = _env_int("EXP_MAX_SOURCE_CHARS", 4000)
 
+# ── Vector index / embedding config ─────────────────────────────────────────
+EMBEDDING_MODEL = os.environ.get("EXP_EMBEDDING_MODEL", "text-embedding-004")
+EMBEDDING_DIMENSIONS = _env_int("EXP_EMBEDDING_DIMENSIONS", 768)
+EMBEDDING_BATCH_SIZE = _env_int("EXP_EMBEDDING_BATCH_SIZE", 250)
+VECTOR_INDEX_NAME = os.environ.get("EXP_VECTOR_INDEX_NAME", "exp_entity_embedding")
+
 
 # ── LLM / transformer factories ──────────────────────────────────────────────
 def _build_llm():
@@ -367,6 +373,37 @@ def _sanitize_tenant_label(uid: str) -> str:
     return f"User_{safe}"
 
 
+def _node_text(node_id: str, node_type: str, props: dict[str, Any]) -> str:
+    """
+    Build a concise, informative text string stored as ``n.text`` on every node.
+    This is the field embedded for vector similarity search in GraphRAG.
+
+    Format:  "<NodeType>: <Name> [<sophistication>] — <evidence/description>"
+    The sophistication and evidence fields are optional and come from whatever
+    properties the LLMGraphTransformer extracted.
+    """
+    header = f"{node_type}: {node_id}"
+
+    soph = props.get("sophistication") or props.get("level")
+    if soph and isinstance(soph, str) and soph.strip():
+        header += f" [{soph.strip()}]"
+
+    details: list[str] = []
+    for field in ("evidence", "description", "summary", "detail", "purpose"):
+        val = props.get(field)
+        if val and isinstance(val, str) and len(val.strip()) > 4:
+            details.append(val.strip())
+            break
+
+    cat = props.get("category")
+    if cat and isinstance(cat, str) and cat.strip().lower() not in ("", node_type.lower()):
+        details.append(f"category: {cat.strip()}")
+
+    if details:
+        return f"{header} — {' | '.join(details)}"
+    return header
+
+
 def _persist_graph_documents(
     graph_documents: list,
     *,
@@ -394,6 +431,10 @@ def _persist_graph_documents(
                 merged = dict(props)
                 if extra_node_props:
                     merged.update(extra_node_props)
+                # Always set a human-readable text field for GraphRAG embedding.
+                # Built from whatever descriptive properties the LLM extracted so
+                # the embedding captures semantic meaning, not just the entity name.
+                merged["text"] = _node_text(node_id, node_type, props)
 
                 if tenant_id:
                     merged["tenantId"] = tenant_id
@@ -452,6 +493,150 @@ def _persist_graph_documents(
                 edges_written += 1
 
     return nodes_written, edges_written
+
+
+# ── Vector index + embedding helpers ─────────────────────────────────────────
+_embedding_model = None
+
+
+def _get_embedding_model():
+    """Lazy-init the Vertex AI text-embedding model (uses same ADC credentials)."""
+    global _embedding_model
+    if _embedding_model is None:
+        from langchain_google_vertexai import VertexAIEmbeddings  # noqa: PLC0415
+
+        kwargs: dict[str, Any] = {
+            "model_name": EMBEDDING_MODEL,
+            "location": Config.VERTEX_LOCATION,
+        }
+        if Config.GOOGLE_CLOUD_PROJECT:
+            kwargs["project"] = Config.GOOGLE_CLOUD_PROJECT
+        logger.info(
+            "[exp-embed] Embedding model: %s @ %s (project=%s)",
+            EMBEDDING_MODEL,
+            Config.VERTEX_LOCATION,
+            Config.GOOGLE_CLOUD_PROJECT or "(ADC default)",
+        )
+        _embedding_model = VertexAIEmbeddings(**kwargs)
+    return _embedding_model
+
+
+def _ensure_vector_index(database: str | None = None) -> None:
+    """
+    Create the Neo4j vector index on ``Entity.embedding`` if it doesn't exist.
+
+    Uses ``IF NOT EXISTS`` so it is safe to call on every pipeline run.
+    Dimensions and similarity function are configurable via env vars
+    ``EXP_EMBEDDING_DIMENSIONS`` (default 768) and the index is named by
+    ``EXP_VECTOR_INDEX_NAME`` (default ``exp_entity_embedding``).
+    """
+    driver = _get_neo4j_driver()
+    session_kwargs: dict[str, Any] = {}
+    if database:
+        session_kwargs["database"] = database
+
+    with driver.session(**session_kwargs) as session:
+        session.run(
+            f"""
+            CREATE VECTOR INDEX {VECTOR_INDEX_NAME} IF NOT EXISTS
+            FOR (n:Entity)
+            ON (n.embedding)
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {EMBEDDING_DIMENSIONS},
+                `vector.similarity_function`: 'cosine'
+            }}}}
+            """
+        )
+    logger.info(
+        "[exp-embed] Vector index '%s' ready (%d dims, cosine similarity)",
+        VECTOR_INDEX_NAME,
+        EMBEDDING_DIMENSIONS,
+    )
+
+
+def _embed_tenant_nodes(
+    tenant_id: str,
+    database: str | None = None,
+    *,
+    batch_size: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """
+    Compute and store embeddings for all tenant nodes that have a ``text``
+    property but no ``embedding`` yet (or all nodes when ``force=True``).
+
+    Embeddings are written back to Neo4j as ``n.embedding`` (float list) so
+    the vector index can serve approximate nearest-neighbour lookups for
+    GraphRAG hybrid retrieval.
+
+    Returns a summary dict with ``embedded``, ``failed``, and ``skipped`` counts.
+    """
+    bs = batch_size if batch_size is not None else EMBEDDING_BATCH_SIZE
+    driver = _get_neo4j_driver()
+    session_kwargs: dict[str, Any] = {}
+    if database:
+        session_kwargs["database"] = database
+
+    user_label = _sanitize_tenant_label(tenant_id)
+    where_clause = (
+        "WHERE n.text IS NOT NULL"
+        if force
+        else "WHERE n.text IS NOT NULL AND n.embedding IS NULL"
+    )
+
+    with driver.session(**session_kwargs) as session:
+        result = session.run(
+            f"""
+            MATCH (n:Entity:`{user_label}` {{tenantId: $tid}})
+            {where_clause}
+            RETURN n.id AS node_id, n.text AS text
+            """,
+            tid=tenant_id,
+        )
+        rows = [(r["node_id"], r["text"]) for r in result if r["text"]]
+
+    if not rows:
+        logger.info("[exp-embed] No nodes need embedding (tenant=%s)", tenant_id)
+        return {"embedded": 0, "failed": 0, "skipped": 0}
+
+    logger.info(
+        "[exp-embed] Embedding %d node(s) for tenant=%s (batch_size=%d) …",
+        len(rows), tenant_id, bs,
+    )
+
+    model = _get_embedding_model()
+    embedded = 0
+    failed = 0
+    total_batches = (len(rows) + bs - 1) // bs
+
+    for batch_idx in range(total_batches):
+        chunk = rows[batch_idx * bs: (batch_idx + 1) * bs]
+        node_ids = [r[0] for r in chunk]
+        texts = [r[1] for r in chunk]
+
+        try:
+            vectors = model.embed_documents(texts)
+            with driver.session(**session_kwargs) as session:
+                for node_id, vector in zip(node_ids, vectors):
+                    session.run(
+                        f"""
+                        MATCH (n:Entity:`{user_label}` {{id: $nid, tenantId: $tid}})
+                        SET n.embedding = $emb
+                        """,
+                        nid=node_id,
+                        tid=tenant_id,
+                        emb=vector,
+                    )
+            embedded += len(chunk)
+            logger.info(
+                "[exp-embed] Batch %d/%d — stored %d embedding(s)",
+                batch_idx + 1, total_batches, len(chunk),
+            )
+        except Exception as exc:
+            logger.error("[exp-embed] Batch %d/%d failed: %s", batch_idx + 1, total_batches, exc)
+            failed += len(chunk)
+
+    return {"embedded": embedded, "failed": failed, "skipped": 0}
 
 
 # ── GCS helpers ──────────────────────────────────────────────────────────────
@@ -717,6 +902,7 @@ async def run_experience_pipeline(
     experience_max_doc_chars: int | None = None,
     max_source_chars: int | None = None,
     force: bool = False,
+    skip_embeddings: bool = False,
 ) -> dict[str, Any]:
     """
     Full experience pipeline for one user.
@@ -729,6 +915,7 @@ async def run_experience_pipeline(
     experience_*     : hyperparams for the experience graph extraction pass
     max_source_chars : max raw Python source chars included per document
     force            : if True, re-assess and re-ingest files already processed
+    skip_embeddings  : if True, skip Phase 4 vector embedding (graph still written)
     """
     uid = normalize_user_id(user_id)
     tenant_id = uid
@@ -911,6 +1098,37 @@ async def run_experience_pipeline(
             }
             _mark_exp_ingested(bucket, code_prefix, blob_name, rec)
 
+    # ── Phase 4: vector index + embeddings ────────────────────────────────────
+    embed_report: dict[str, Any] = {"skipped": True}
+    if not skip_embeddings:
+        logger.info("[exp] Phase 4 — Vector index + embeddings …")
+        try:
+            _ensure_vector_index(neo4j_database)
+        except Exception as exc:
+            logger.warning("[exp] Vector index creation failed (non-fatal): %s", exc)
+
+        if struct_nodes > 0 or exp_nodes > 0:
+            try:
+                embed_report = _embed_tenant_nodes(
+                    tenant_id,
+                    neo4j_database,
+                    batch_size=EMBEDDING_BATCH_SIZE,
+                    force=force,
+                )
+                logger.info(
+                    "[exp] Embeddings: %d stored, %d failed",
+                    embed_report.get("embedded", 0),
+                    embed_report.get("failed", 0),
+                )
+            except Exception as exc:
+                logger.error("[exp] Embedding phase failed (non-fatal): %s", exc)
+                embed_report = {"embedded": 0, "failed": -1, "error": str(exc)}
+        else:
+            logger.info("[exp] No new nodes written — embedding phase skipped.")
+            embed_report = {"embedded": 0, "failed": 0, "skipped": 0}
+    else:
+        logger.info("[exp] Embedding phase skipped (--skip-embeddings).")
+
     report = {
         "status": "completed" if both_ok else "partial_error",
         "user_id": uid,
@@ -928,6 +1146,8 @@ async def run_experience_pipeline(
             "edges_written": exp_edges,
             "error": exp_error,
         },
+        "embedding_pass": embed_report,
+        "vector_index": VECTOR_INDEX_NAME,
         "hyperparameters": {
             "structural": {
                 "batch_size": s_batch,
@@ -972,6 +1192,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Re-generate assessments and re-ingest even for files already processed",
     )
+    p.add_argument(
+        "--skip-embeddings",
+        action="store_true",
+        help="Skip Phase 4 (vector index + embedding computation). Graph is still written.",
+    )
     return p.parse_args()
 
 
@@ -989,6 +1214,7 @@ def main() -> None:
             experience_max_doc_chars=args.experience_max_doc_chars,
             max_source_chars=args.max_source_chars,
             force=args.force,
+            skip_embeddings=args.skip_embeddings,
         )
     )
     print(json.dumps(result, indent=2))

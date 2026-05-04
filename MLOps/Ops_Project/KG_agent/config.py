@@ -80,15 +80,15 @@ def google_cloud_project() -> str | None:
 class Config:
     """Read-only settings snapshot (evaluated at import time)."""
     # --- Neo4j (tools2, tools.py, kg_reconstruct_test) ---
-    #NEO4J_URI: str = _env_str("NEO4J_URI", "neo4j+s://76522009.databases.neo4j.io") or "neo4j+s://76522009.databases.neo4j.io"
-    #NEO4J_USER: str = _env_str("NEO4J_USER", "76522009") or "76522009"
-    #NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "ClEp-qPfGT4SiXaGCtNwhMW-NKqcwWPUEyfZAMtUABw") or "ClEp-qPfGT4SiXaGCtNwhMW-NKqcwWPUEyfZAMtUABw"
+    NEO4J_URI: str = _env_str("NEO4J_URI", "neo4j+s://76522009.databases.neo4j.io") or "neo4j+s://76522009.databases.neo4j.io"
+    NEO4J_USER: str = _env_str("NEO4J_USER", "76522009") or "76522009"
+    NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "ClEp-qPfGT4SiXaGCtNwhMW-NKqcwWPUEyfZAMtUABw") or "ClEp-qPfGT4SiXaGCtNwhMW-NKqcwWPUEyfZAMtUABw"
 
 
     # for local config
-    NEO4J_URI: str = _env_str("NEO4J_URI", "bolt://localhost:7687") or "bolt://localhost:7687"
-    NEO4J_USER: str = _env_str("NEO4J_USER", "neo4j") or "neo4j"
-    NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "cowboy78910") or "cowboy78910"
+    #NEO4J_URI: str = _env_str("NEO4J_URI", "bolt://localhost:7687") or "bolt://localhost:7687"
+    #NEO4J_USER: str = _env_str("NEO4J_USER", "neo4j") or "neo4j"
+    #NEO4J_PASSWORD: str = _env_str("NEO4J_PASSWORD", "cowboy78910") or "cowboy78910"
     # --- GCS + summarization (pipeline2) ---
     GCS_BUCKET_NAME: str = _env_str("GCS_BUCKET_NAME", "codebases-04-03-26") or "codebases-04-03-26"
     GCS_PREFIX: str | None = _env_str("GCS_PREFIX") or None
