@@ -94,5 +94,29 @@ class Settings:
         # Higher cap than structural to preserve implementation detail.
         self.kg_technical_max_doc_chars: int | None = _opt_int("KG_TECHNICAL_MAX_DOC_CHARS")
 
+        # ── Vertex AI RAG Engine (per-user empty corpus on registration) ─
+        # GCP project/region for Vertex RAG. Defaults to the BigQuery project
+        # and us-central1, matching the rest of the stack.
+        self.vertex_project: str = (
+            os.environ.get("VERTEX_PROJECT", "").strip() or self.bq_project_id
+        )
+        self.vertex_location: str = (
+            os.environ.get("VERTEX_LOCATION", "").strip()
+            or os.environ.get("GOOGLE_CLOUD_REGION", "").strip()
+            or "us-central1"
+        )
+        # Optional Vertex publisher model used as the embedding model for the
+        # RAG corpus (e.g. "publishers/google/models/text-embedding-005").
+        # Leave blank to let the SDK pick its default.
+        self.rag_embedding_publisher_model: str = os.environ.get(
+            "RAG_EMBEDDING_PUBLISHER_MODEL", ""
+        ).strip()
+        # If true, /auth/register fails when the corpus cannot be created.
+        # Defaults to false so transient Vertex outages don't lock out signups.
+        self.rag_corpus_required_on_register: bool = (
+            os.environ.get("RAG_CORPUS_REQUIRED_ON_REGISTER", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
 
 settings = Settings()

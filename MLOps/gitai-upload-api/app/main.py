@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import subprocess
@@ -29,6 +30,8 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.config import settings
 
+
+logger = logging.getLogger("gitai_upload_api")
 
 app = FastAPI(title="git-ai Python upload", version="2.0.0")
 
@@ -150,21 +153,41 @@ class AuthResponse(BaseModel):
     session_token: str
     expires_at: str
     created: bool = False
+    rag_corpus_id: str | None = None
 
 
 def _fetch_user(email: str) -> dict[str, Any] | None:
+    """
+    Fetch a user row by email. Tries to read `rag_corpus_id`; falls back to
+    the legacy schema (without that column) so this service keeps working on
+    pre-existing users tables until they're migrated.
+    """
     client = _bq_client()
-    sql = f"""
-        SELECT user_id, email, password_hash, is_active, session_token_hash, session_expires_at
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email.lower())]
+    )
+    sql_with_corpus = f"""
+        SELECT user_id, email, password_hash, is_active, session_token_hash,
+               session_expires_at, rag_corpus_id
         FROM `{_users_table_ref()}`
         WHERE email = @email
         ORDER BY created_at DESC
         LIMIT 1
     """
-    cfg = bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email.lower())]
-    )
-    rows = list(client.query(sql, job_config=cfg).result())
+    try:
+        rows = list(client.query(sql_with_corpus, job_config=cfg).result())
+        has_corpus_col = True
+    except Exception:
+        sql_legacy = f"""
+            SELECT user_id, email, password_hash, is_active, session_token_hash,
+                   session_expires_at
+            FROM `{_users_table_ref()}`
+            WHERE email = @email
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        rows = list(client.query(sql_legacy, job_config=cfg).result())
+        has_corpus_col = False
     if not rows:
         return None
     r = rows[0]
@@ -175,6 +198,7 @@ def _fetch_user(email: str) -> dict[str, Any] | None:
         "is_active": bool(r["is_active"]),
         "session_token_hash": r["session_token_hash"],
         "session_expires_at": r["session_expires_at"],
+        "rag_corpus_id": r["rag_corpus_id"] if has_corpus_col else None,
     }
 
 
@@ -187,7 +211,35 @@ def _insert_user(email: str, password: str) -> dict[str, str]:
     user_id = str(uuid.uuid4())
     password_hash = _hash_password(password)
     client = _bq_client()
-    sql = f"""
+    sql_with_corpus = f"""
+        INSERT INTO `{_users_table_ref()}` (
+            user_id,
+            email,
+            password_hash,
+            created_at,
+            last_login_at,
+            is_active,
+            session_token_hash,
+            session_expires_at,
+            total_upload_requests,
+            total_uploaded_lines,
+            rag_corpus_id
+        )
+        VALUES (
+            @user_id,
+            @email,
+            @password_hash,
+            CURRENT_TIMESTAMP(),
+            NULL,
+            TRUE,
+            NULL,
+            NULL,
+            0,
+            0,
+            NULL
+        )
+    """
+    sql_legacy = f"""
         INSERT INTO `{_users_table_ref()}` (
             user_id,
             email,
@@ -221,10 +273,124 @@ def _insert_user(email: str, password: str) -> dict[str, str]:
         ]
     )
     try:
-        client.query(sql, job_config=cfg).result()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to insert user: {e}") from e
+        client.query(sql_with_corpus, job_config=cfg).result()
+    except Exception:
+        try:
+            client.query(sql_legacy, job_config=cfg).result()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to insert user: {e}") from e
     return {"user_id": user_id, "email": email.lower()}
+
+
+def _set_user_rag_corpus(email: str, rag_corpus_id: str) -> None:
+    """Persist the Vertex RAG corpus numeric id on the user row."""
+    client = _bq_client()
+    sql = f"""
+        UPDATE `{_users_table_ref()}`
+        SET rag_corpus_id = @rag_corpus_id
+        WHERE email = @email
+    """
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("rag_corpus_id", "STRING", rag_corpus_id),
+            bigquery.ScalarQueryParameter("email", "STRING", email.lower()),
+        ]
+    )
+    client.query(sql, job_config=cfg).result()
+
+
+def _rag_corpus_display_name(user_id: str) -> str:
+    # Vertex RAG display names accept up to 128 chars and a constrained charset.
+    # User IDs are uuid4 hex, so this is always safe.
+    return f"gitai-{user_id}"
+
+
+def _extract_rag_corpus_id(resource_name: str) -> str:
+    """
+    Extract the numeric id (last path segment) from a Vertex RAG corpus
+    resource name like ``projects/.../locations/.../ragCorpora/<id>``.
+
+    Falls back to the original string if it doesn't match the expected shape
+    so downstream code never gets an empty value.
+    """
+    if not resource_name:
+        return ""
+    tail = resource_name.rstrip("/").rsplit("/", 1)[-1]
+    return tail or resource_name
+
+
+def _create_user_rag_corpus(user_id: str, email: str) -> str:
+    """
+    Create an empty Vertex AI RAG Engine corpus for a freshly registered user.
+
+    Returns the corpus **numeric id** (the last segment of the Vertex resource
+    name). Reconstruct the full resource name as
+    ``projects/{VERTEX_PROJECT}/locations/{VERTEX_LOCATION}/ragCorpora/{id}``
+    when calling the SDK. Raises on failure so the caller can decide whether
+    to fail the registration.
+    """
+    if not settings.vertex_project:
+        raise RuntimeError(
+            "Vertex project is not configured: set VERTEX_PROJECT or BQ_PROJECT_ID."
+        )
+
+    import vertexai  # noqa: PLC0415 — lazy import; only needed during register
+    from vertexai import rag  # noqa: PLC0415
+
+    vertexai.init(project=settings.vertex_project, location=settings.vertex_location)
+
+    display_name = _rag_corpus_display_name(user_id)
+    description = f"gitai per-user RAG corpus for {email}"
+
+    backend_config = None
+    publisher_model = settings.rag_embedding_publisher_model
+    if publisher_model:
+        # The Vertex SDK has gone through several config shapes for embedding
+        # selection (EmbeddingModelConfig, RagVectorDbConfig, etc.). Try the
+        # newer one first and fall back if unavailable in the installed SDK.
+        try:
+            backend_config = rag.RagVectorDbConfig(
+                rag_embedding_model_config=rag.RagEmbeddingModelConfig(
+                    vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
+                        publisher_model=publisher_model,
+                    )
+                )
+            )
+        except AttributeError:
+            backend_config = None
+
+    try:
+        if backend_config is not None:
+            corpus = rag.create_corpus(
+                display_name=display_name,
+                description=description,
+                backend_config=backend_config,
+            )
+        elif publisher_model:
+            embedding_model_config = rag.EmbeddingModelConfig(
+                publisher_model=publisher_model
+            )
+            corpus = rag.create_corpus(
+                display_name=display_name,
+                description=description,
+                embedding_model_config=embedding_model_config,
+            )
+        else:
+            corpus = rag.create_corpus(
+                display_name=display_name,
+                description=description,
+            )
+    except TypeError:
+        # Older SDKs may not accept `description`.
+        corpus = rag.create_corpus(display_name=display_name)
+
+    name = getattr(corpus, "name", "") or ""
+    if not name:
+        raise RuntimeError("Vertex returned a corpus without a resource name.")
+    corpus_id = _extract_rag_corpus_id(name)
+    if not corpus_id:
+        raise RuntimeError(f"Could not parse corpus id from resource name: {name!r}")
+    return corpus_id
 
 
 def _set_session(email: str) -> tuple[str, str]:
@@ -695,6 +861,34 @@ def register(body: AuthRequest, x_api_key: str | None = Security(api_key_header)
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
     created = _insert_user(body.email.lower(), body.password)
+
+    # Create an empty Vertex AI RAG Engine corpus for the new user. This is
+    # the user's private knowledge base; later uploads / KG runs can populate
+    # it. Failures are non-fatal by default so a Vertex outage doesn't block
+    # registration; flip RAG_CORPUS_REQUIRED_ON_REGISTER=1 to make it strict.
+    rag_corpus_id: str | None = None
+    try:
+        rag_corpus_id = _create_user_rag_corpus(created["user_id"], created["email"])
+    except Exception as exc:
+        logger.exception("Failed to create RAG corpus for user %s", created["user_id"])
+        if settings.rag_corpus_required_on_register:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to create RAG corpus: {exc}",
+            ) from exc
+
+    if rag_corpus_id:
+        try:
+            _set_user_rag_corpus(created["email"], rag_corpus_id)
+        except Exception:
+            # The corpus exists in Vertex; we just couldn't persist its id.
+            # Surface this in logs but don't fail registration.
+            logger.exception(
+                "Created RAG corpus %s but failed to persist on user row %s",
+                rag_corpus_id,
+                created["user_id"],
+            )
+
     token, expires = _set_session(created["email"])
     return AuthResponse(
         user_id=created["user_id"],
@@ -702,6 +896,7 @@ def register(body: AuthRequest, x_api_key: str | None = Security(api_key_header)
         session_token=token,
         expires_at=expires,
         created=True,
+        rag_corpus_id=rag_corpus_id,
     )
 
 
@@ -722,6 +917,7 @@ def login(body: AuthRequest, x_api_key: str | None = Security(api_key_header)) -
         session_token=token,
         expires_at=expires,
         created=False,
+        rag_corpus_id=user.get("rag_corpus_id"),
     )
 
 
