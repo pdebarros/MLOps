@@ -12,7 +12,7 @@
 #   _CORS_ORIGINS    : comma-separated allowed origins (e.g. tauri://localhost,https://app.example.com)
 #   _CLOUD_RUN_KG_JOB_NAME : name of the pre-created KG pipeline Cloud Run Job
 #   _VERTEX_PROJECT  : GCP project for Vertex RAG (defaults to _BQ_PROJECT_ID if blank)
-#   _VERTEX_LOCATION : Vertex region for per-user RAG corpora (default us-central1)
+#   _VERTEX_LOCATION : Vertex region for per-user RAG corpora (default europe-west4 / Spanner)
 #   _RAG_CORPUS_REQUIRED_ON_REGISTER : "1" to fail /auth/register on Vertex errors (default blank = lenient)
 
 substitutions:
@@ -26,7 +26,7 @@ substitutions:
   _CORS_ORIGINS: "tauri://localhost"
   _CLOUD_RUN_KG_JOB_NAME: ""
   _VERTEX_PROJECT: ""
-  _VERTEX_LOCATION: "us-central1"
+  _VERTEX_LOCATION: "europe-west4"
   _RAG_CORPUS_REQUIRED_ON_REGISTER: ""
 
 steps:

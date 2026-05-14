@@ -37,6 +37,12 @@ rag_corpus_id:STRING
 Reconstruct the full resource name when calling Vertex as
 `projects/<VERTEX_PROJECT>/locations/<VERTEX_LOCATION>/ragCorpora/<id>`.
 
+**RAG backend:** registration creates corpora with
+`EmbeddingModelConfig(publisher_model=text-embedding-004)` in
+`VERTEX_LOCATION` (default `europe-west4`, Netherlands), which provisions
+**Spanner-backed** RAG rather than Serverless Vector Search. Override
+`VERTEX_LOCATION` or `RAG_EMBEDDING_PUBLISHER_MODEL` via env if needed.
+
 To migrate an existing table that doesn't have the column yet, add it:
 
 ```bash
@@ -247,8 +253,8 @@ Commit `.cloudbuild.yaml` to your repo and connect a Cloud Build trigger. The tr
 | `KG_STRUCTURAL_BATCH_SIZE` | No | Structural KG batch size override |
 | `KG_TECHNICAL_BATCH_SIZE` | No | Technical KG batch size override |
 | `VERTEX_PROJECT` | No | GCP project for Vertex RAG Engine (defaults to `BQ_PROJECT_ID`) |
-| `VERTEX_LOCATION` | No | Vertex region for the per-user RAG corpus (default: `us-central1`) |
-| `RAG_EMBEDDING_PUBLISHER_MODEL` | No | Embedding model resource (e.g. `publishers/google/models/text-embedding-005`) |
+| `VERTEX_LOCATION` | No | Vertex region for the per-user RAG corpus (default: `europe-west4` — Spanner RAG) |
+| `RAG_EMBEDDING_PUBLISHER_MODEL` | No | Publisher embedding model (default: `publishers/google/models/text-embedding-004`) |
 | `RAG_CORPUS_REQUIRED_ON_REGISTER` | No | If `1/true`, registration fails when the corpus cannot be created (default: lenient) |
 
 ---

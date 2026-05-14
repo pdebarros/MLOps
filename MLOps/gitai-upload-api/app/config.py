@@ -96,21 +96,22 @@ class Settings:
 
         # ── Vertex AI RAG Engine (per-user empty corpus on registration) ─
         # GCP project/region for Vertex RAG. Defaults to the BigQuery project
-        # and us-central1, matching the rest of the stack.
+        # and europe-west4 (Netherlands): Spanner-backed RAG is available there
+        # without Serverless/allowlist issues common in us-central1 for new projects.
         self.vertex_project: str = (
             os.environ.get("VERTEX_PROJECT", "").strip() or self.bq_project_id
         )
         self.vertex_location: str = (
             os.environ.get("VERTEX_LOCATION", "").strip()
             or os.environ.get("GOOGLE_CLOUD_REGION", "").strip()
-            or "us-central1"
+            or "europe-west4"
         )
-        # Optional Vertex publisher model used as the embedding model for the
-        # RAG corpus (e.g. "publishers/google/models/text-embedding-005").
-        # Leave blank to let the SDK pick its default.
-        self.rag_embedding_publisher_model: str = os.environ.get(
-            "RAG_EMBEDDING_PUBLISHER_MODEL", ""
-        ).strip()
+        # Vertex publisher embedding model for RAG corpus creation. Default matches
+        # Spanner-mode setup (global publisher path; SDK resolves to the region).
+        self.rag_embedding_publisher_model: str = (
+            os.environ.get("RAG_EMBEDDING_PUBLISHER_MODEL", "").strip()
+            or "publishers/google/models/text-embedding-004"
+        )
         # If true, /auth/register fails when the corpus cannot be created.
         # Defaults to false so transient Vertex outages don't lock out signups.
         self.rag_corpus_required_on_register: bool = (

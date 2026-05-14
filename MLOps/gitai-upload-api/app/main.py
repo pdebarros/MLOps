@@ -323,6 +323,10 @@ def _create_user_rag_corpus(user_id: str, email: str) -> str:
     """
     Create an empty Vertex AI RAG Engine corpus for a freshly registered user.
 
+    Uses ``EmbeddingModelConfig`` with a publisher embedding model (default
+    ``text-embedding-004``), which provisions a **Spanner-backed** corpus in
+    the configured region (default ``europe-west4``), not Serverless Vector Search.
+
     Returns the corpus **numeric id** (the last segment of the Vertex resource
     name). Reconstruct the full resource name as
     ``projects/{VERTEX_PROJECT}/locations/{VERTEX_LOCATION}/ragCorpora/{id}``
@@ -342,47 +346,22 @@ def _create_user_rag_corpus(user_id: str, email: str) -> str:
     display_name = _rag_corpus_display_name(user_id)
     description = f"gitai per-user RAG corpus for {email}"
 
-    backend_config = None
-    publisher_model = settings.rag_embedding_publisher_model
-    if publisher_model:
-        # The Vertex SDK has gone through several config shapes for embedding
-        # selection (EmbeddingModelConfig, RagVectorDbConfig, etc.). Try the
-        # newer one first and fall back if unavailable in the installed SDK.
-        try:
-            backend_config = rag.RagVectorDbConfig(
-                rag_embedding_model_config=rag.RagEmbeddingModelConfig(
-                    vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
-                        publisher_model=publisher_model,
-                    )
-                )
-            )
-        except AttributeError:
-            backend_config = None
+    emb_config = rag.EmbeddingModelConfig(
+        publisher_model=settings.rag_embedding_publisher_model
+    )
 
     try:
-        if backend_config is not None:
-            corpus = rag.create_corpus(
-                display_name=display_name,
-                description=description,
-                backend_config=backend_config,
-            )
-        elif publisher_model:
-            embedding_model_config = rag.EmbeddingModelConfig(
-                publisher_model=publisher_model
-            )
-            corpus = rag.create_corpus(
-                display_name=display_name,
-                description=description,
-                embedding_model_config=embedding_model_config,
-            )
-        else:
-            corpus = rag.create_corpus(
-                display_name=display_name,
-                description=description,
-            )
+        corpus = rag.create_corpus(
+            display_name=display_name,
+            description=description,
+            embedding_model_config=emb_config,
+        )
     except TypeError:
         # Older SDKs may not accept `description`.
-        corpus = rag.create_corpus(display_name=display_name)
+        corpus = rag.create_corpus(
+            display_name=display_name,
+            embedding_model_config=emb_config,
+        )
 
     name = getattr(corpus, "name", "") or ""
     if not name:
