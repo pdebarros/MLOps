@@ -3,7 +3,7 @@ uvicorn[standard]==0.32.1
 google-cloud-storage==2.19.0
 google-cloud-bigquery==3.27.0
 google-cloud-run>=0.10.0
-google-cloud-aiplatform>=1.71.0
+google-cloud-aiplatform>=1.77.0
 pydantic==2.10.3
 email-validator==2.2.0
 python-multipart==0.0.20

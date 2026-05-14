@@ -323,9 +323,11 @@ def _create_user_rag_corpus(user_id: str, email: str) -> str:
     """
     Create an empty Vertex AI RAG Engine corpus for a freshly registered user.
 
-    Uses ``EmbeddingModelConfig`` with a publisher embedding model (default
-    ``text-embedding-004``), which provisions a **Spanner-backed** corpus in
-    the configured region (default ``europe-west4``), not Serverless Vector Search.
+    Uses ``vertexai.preview.rag.EmbeddingModelConfig`` with a publisher embedding
+    model (default ``text-embedding-004``), which provisions a **Spanner-backed**
+    corpus in the configured region (default ``europe-west4``). The stable
+    ``vertexai.rag`` module often omits ``EmbeddingModelConfig``; preview matches
+    Google's sample code and Cloud Run builds.
 
     Returns the corpus **numeric id** (the last segment of the Vertex resource
     name). Reconstruct the full resource name as
@@ -339,7 +341,16 @@ def _create_user_rag_corpus(user_id: str, email: str) -> str:
         )
 
     import vertexai  # noqa: PLC0415 — lazy import; only needed during register
-    from vertexai import rag  # noqa: PLC0415
+    try:
+        from vertexai.preview import rag  # noqa: PLC0415 — EmbeddingModelConfig lives here in 1.71+
+    except ImportError:
+        from vertexai import rag  # noqa: PLC0415
+    if not hasattr(rag, "EmbeddingModelConfig"):
+        raise RuntimeError(
+            "vertexai RAG has no EmbeddingModelConfig. Upgrade google-cloud-aiplatform "
+            "(e.g. pip install -U 'google-cloud-aiplatform>=1.77.0') or use a SDK with "
+            "vertexai.preview.rag.EmbeddingModelConfig."
+        )
 
     vertexai.init(project=settings.vertex_project, location=settings.vertex_location)
 
