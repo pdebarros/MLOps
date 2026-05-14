@@ -72,6 +72,11 @@ class Settings:
         # Name of the pre-created Cloud Run Job that runs prod_pipeline.py.
         # When set, file uploads trigger a Cloud Run Job execution instead of a local subprocess.
         self.cloud_run_kg_job_name: str = os.environ.get("CLOUD_RUN_KG_JOB_NAME", "").strip()
+        # Optional: experience_pipeline.py job (e.g. image from KG_agent/Dockerfile.experience).
+        # Used when CLOUD_RUN_KG_JOB_NAME is empty so uploads still trigger a remote worker.
+        self.cloud_run_experience_kg_job_name: str = os.environ.get(
+            "CLOUD_RUN_EXPERIENCE_KG_JOB_NAME", ""
+        ).strip()
 
         # ── KG pipeline — optional remote worker ─────────────────────────
         # When set, jobs are delegated to a separate KG worker service instead of running

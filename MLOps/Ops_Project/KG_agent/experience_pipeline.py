@@ -50,6 +50,29 @@ Run
   python experience_pipeline.py --user-id u_123 --neo4j-database neo4j \\
       --structural-batch-size 2 --experience-batch-size 1 \\
       --max-source-chars 4000 --force
+
+Vertex RAG (after each run triggered by uploads via gitai-upload-api)
+----------------------------------------------------------------------
+All ``.py`` objects for the user under the GCS code prefix are imported into the
+Vertex RAG corpus mapped in BigQuery for that ``user_id``. Import uses the
+documented ``curl`` + ``gcloud auth print-access-token`` flow when the Cloud SDK
+is installed (``Dockerfile.experience``); otherwise urllib + ADC.
+
+BigQuery (create before prod use)::
+
+    CREATE TABLE `PROJECT.gitai.user_rag_engines` (
+      user_id STRING NOT NULL,
+      rag_engine_id STRING NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+    );
+
+``rag_engine_id`` may be the corpus id alone or a full resource name
+``projects/.../locations/.../ragCorpora/...``.
+
+Environment (optional): ``BQ_USER_RAG_ENGINE_TABLE``, ``BQ_DATASET``,
+``BQ_USER_RAG_ENGINE_TABLE_NAME``, ``BQ_USER_RAG_ENGINE_ID_COLUMN``,
+``RAG_ENGINE_LOCATION``, ``RAG_SKIP_IMPORT``, ``RAG_USE_GCLOUD_CURL``,
+``RAG_IMPORT_GCS_URI_BATCH_SIZE``, ``RAG_IMPORT_POLL_TIMEOUT_SECONDS``.
 """
 from __future__ import annotations
 
@@ -59,6 +82,13 @@ import json
 import logging
 import os
 import re
+import shlex
+import shutil
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
@@ -704,6 +734,317 @@ def _run_transformer_pass(
     return all_gd
 
 
+# ── Vertex RAG corpus sync (BigQuery user → corpus, import via gcloud + curl) ─
+_RAG_RESOURCE_RE = re.compile(
+    r"^projects/(?P<p>[^/]+)/locations/(?P<l>[^/]+)/ragCorpora/(?P<c>[^/]+)\s*$"
+)
+
+
+def _user_rag_mapping_table_ref() -> str | None:
+    """
+    Fully-qualified BigQuery table holding user_id → rag_engine_id.
+
+    Set BQ_USER_RAG_ENGINE_TABLE to `project.dataset.table`, or define
+    BQ_PROJECT_ID (or GOOGLE_CLOUD_PROJECT), BQ_DATASET (default gitai), and
+    BQ_USER_RAG_ENGINE_TABLE_NAME (default user_rag_engines).
+    """
+    explicit = os.environ.get("BQ_USER_RAG_ENGINE_TABLE", "").strip()
+    if explicit:
+        return explicit
+    proj = (
+        os.environ.get("BQ_PROJECT_ID", "").strip()
+        or (Config.GOOGLE_CLOUD_PROJECT or "").strip()
+    )
+    if not proj:
+        return None
+    ds = os.environ.get("BQ_DATASET", "gitai").strip()
+    tbl = os.environ.get("BQ_USER_RAG_ENGINE_TABLE_NAME", "user_rag_engines").strip()
+    return f"{proj}.{ds}.{tbl}"
+
+
+def _fetch_rag_engine_id_for_user(uid: str) -> str | None:
+    """Return raw rag_engine_id cell from BigQuery, or None if missing / misconfigured."""
+    table = _user_rag_mapping_table_ref()
+    if not table:
+        logger.warning("[rag] No BigQuery table ref (set BQ_USER_RAG_ENGINE_TABLE or BQ_PROJECT_ID).")
+        return None
+    col = os.environ.get("BQ_USER_RAG_ENGINE_ID_COLUMN", "rag_engine_id").strip() or "rag_engine_id"
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", col):
+        logger.error("[rag] Invalid BQ_USER_RAG_ENGINE_ID_COLUMN: %r", col)
+        return None
+    from google.cloud import bigquery  # noqa: PLC0415
+
+    client = bigquery.Client(
+        project=os.environ.get("BQ_PROJECT_ID", "").strip() or None,
+    )
+    sql = f"SELECT `{col}` AS rag_engine_id FROM `{table}` WHERE user_id = @uid LIMIT 1"
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("uid", "STRING", uid)]
+    )
+    try:
+        rows = list(client.query(sql, job_config=cfg).result())
+    except Exception as exc:
+        logger.error("[rag] BigQuery lookup failed: %s", exc)
+        return None
+    if not rows:
+        logger.info("[rag] No rag_engine_id row for user_id=%s in %s", uid, table)
+        return None
+    val = rows[0].get("rag_engine_id")
+    if val is None or str(val).strip() == "":
+        return None
+    return str(val).strip()
+
+
+def _parse_rag_engine_ref(raw: str) -> tuple[str, str, str]:
+    """
+    Resolve (gcp_project, vertex_location, rag_corpus_id) for the Vertex RAG API.
+
+    ``rag_engine_id`` may be the corpus id alone or a full
+    ``projects/.../locations/.../ragCorpora/...`` resource name.
+    """
+    s = raw.strip()
+    m = _RAG_RESOURCE_RE.match(s)
+    if m:
+        return m.group("p"), m.group("l"), m.group("c")
+    proj = (Config.GOOGLE_CLOUD_PROJECT or "").strip()
+    loc = (os.environ.get("RAG_ENGINE_LOCATION", "").strip() or Config.VERTEX_LOCATION).strip()
+    if not proj:
+        raise ValueError("GOOGLE_CLOUD_PROJECT (or rag_engine_id full resource name) is required for RAG import.")
+    return proj, loc, s
+
+
+def _vertex_access_token() -> str:
+    """OAuth2 access token: prefer ``gcloud auth print-access-token``, else Application Default Credentials."""
+    if os.environ.get("RAG_FORCE_ADC_TOKEN", "").strip().lower() in ("1", "true", "yes"):
+        return _vertex_access_token_adc()
+    gcloud = shutil.which("gcloud")
+    if gcloud:
+        proc = subprocess.run(
+            [gcloud, "auth", "print-access-token"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+        logger.warning(
+            "[rag] gcloud auth print-access-token failed (rc=%s): %s — falling back to ADC",
+            proc.returncode,
+            (proc.stderr or proc.stdout or "").strip()[:500],
+        )
+    return _vertex_access_token_adc()
+
+
+def _vertex_access_token_adc() -> str:
+    import google.auth  # noqa: PLC0415
+    import google.auth.transport.requests  # noqa: PLC0415
+
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    creds.refresh(google.auth.transport.requests.Request())
+    if not creds.token:
+        raise RuntimeError("ADC refresh did not return a token for Vertex RAG import.")
+    return creds.token
+
+
+def _rag_import_url(project: str, location: str, corpus_id: str) -> str:
+    return (
+        f"https://{location}-aiplatform.googleapis.com/v1/"
+        f"projects/{project}/locations/{location}/ragCorpora/{corpus_id}/ragFiles:import"
+    )
+
+
+def _rag_import_post_gcloud_curl(
+    project: str,
+    location: str,
+    corpus_id: str,
+    gcs_uris: list[str],
+) -> dict[str, Any]:
+    """
+    POST ragFiles:import using the same pattern as Vertex docs:
+    ``curl`` + ``Authorization: Bearer $(gcloud auth print-access-token)``.
+    """
+    url = _rag_import_url(project, location, corpus_id)
+    body: dict[str, Any] = {
+        "import_rag_files_config": {
+            "gcs_source": {"uris": gcs_uris},
+        }
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        delete=False,
+        encoding="utf-8",
+    ) as tmp:
+        json.dump(body, tmp)
+        path = tmp.name
+    try:
+        proc = subprocess.run(
+            [
+                "bash",
+                "-lc",
+                (
+                    "curl -sS -X POST "
+                    '-H "Authorization: Bearer $(gcloud auth print-access-token)" '
+                    '-H "Content-Type: application/json; charset=utf-8" '
+                    f"-d @{shlex.quote(path)} {shlex.quote(url)}"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"ragFiles:import curl failed rc={proc.returncode}: "
+            f"{(proc.stderr or proc.stdout or '').strip()[:4000]}"
+        )
+    out = (proc.stdout or "").strip()
+    if not out:
+        raise RuntimeError("ragFiles:import curl returned empty stdout")
+    return json.loads(out)
+
+
+def _rag_import_post_urllib(
+    project: str,
+    location: str,
+    corpus_id: str,
+    gcs_uris: list[str],
+    token: str,
+) -> dict[str, Any]:
+    """POST ragFiles:import via urllib (ADC / static token)."""
+    url = _rag_import_url(project, location, corpus_id)
+    body: dict[str, Any] = {
+        "import_rag_files_config": {
+            "gcs_source": {"uris": gcs_uris},
+        }
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ragFiles:import HTTP {exc.code}: {err_body[:4000]}") from exc
+    return json.loads(payload) if payload else {}
+
+
+def _rag_import_post(
+    project: str,
+    location: str,
+    corpus_id: str,
+    gcs_uris: list[str],
+    token: str,
+) -> dict[str, Any]:
+    """POST ragFiles:import; prefers gcloud+curl when Cloud SDK is installed."""
+    use_gcloud_curl = os.environ.get("RAG_USE_GCLOUD_CURL", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    if use_gcloud_curl and shutil.which("gcloud"):
+        return _rag_import_post_gcloud_curl(project, location, corpus_id, gcs_uris)
+    return _rag_import_post_urllib(project, location, corpus_id, gcs_uris, token)
+
+
+def _rag_poll_operation(operation_name: str, location: str, timeout_s: float) -> dict[str, Any]:
+    """GET long-running operation until done or timeout (refreshes OAuth token each poll)."""
+    deadline = time.monotonic() + timeout_s
+    # operation_name is like projects/.../locations/.../operations/...
+    safe_name = operation_name.lstrip("/")
+    while time.monotonic() < deadline:
+        token = _vertex_access_token()
+        url = f"https://{location}-aiplatform.googleapis.com/v1/{safe_name}"
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            op = json.loads(resp.read().decode("utf-8"))
+        if op.get("done"):
+            return op
+        time.sleep(5.0)
+    raise TimeoutError(f"RAG import operation timed out after {timeout_s}s: {operation_name}")
+
+
+def _sync_python_blobs_to_rag_corpus(
+    uid: str,
+    bucket: storage.Bucket,
+    py_blob_names: list[str],
+) -> dict[str, Any]:
+    """
+    Import all user ``.py`` objects from GCS into the Vertex RAG corpus mapped in BigQuery.
+
+    Uses the same auth pattern as Google’s curl samples (``gcloud auth print-access-token``)
+    when the Cloud SDK is installed; otherwise uses Application Default Credentials.
+    """
+    if os.environ.get("RAG_SKIP_IMPORT", "").strip().lower() in ("1", "true", "yes"):
+        return {"status": "skipped", "reason": "RAG_SKIP_IMPORT set"}
+
+    raw_engine = _fetch_rag_engine_id_for_user(uid)
+    if not raw_engine:
+        return {"status": "skipped", "reason": "no_rag_engine_id_for_user"}
+
+    try:
+        project, location, corpus_id = _parse_rag_engine_ref(raw_engine)
+    except Exception as exc:
+        return {"status": "error", "reason": f"bad_rag_engine_id: {exc}"}
+
+    uris = [f"gs://{bucket.name}/{n}" for n in py_blob_names]
+    batch_size = int(os.environ.get("RAG_IMPORT_GCS_URI_BATCH_SIZE", "32") or "32")
+    poll_timeout = float(os.environ.get("RAG_IMPORT_POLL_TIMEOUT_SECONDS", "1800") or "1800")
+
+    operations: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for i in range(0, len(uris), max(1, batch_size)):
+        chunk = uris[i: i + batch_size]
+        try:
+            token = _vertex_access_token()
+            resp = _rag_import_post(project, location, corpus_id, chunk, token)
+            op_name = resp.get("name")
+            if not op_name:
+                errors.append(f"batch_{i}: unexpected response (no operation name): {repr(resp)[:800]}")
+                continue
+            done = _rag_poll_operation(str(op_name), location, poll_timeout)
+            slim = {"name": op_name, "done": bool(done.get("done"))}
+            if done.get("error"):
+                slim["error"] = done["error"]
+            operations.append(slim)
+        except Exception as exc:
+            logger.exception("[rag] import batch failed (offset %s)", i)
+            errors.append(f"batch_{i}: {exc}")
+
+    status = "completed" if not errors else ("partial_error" if operations else "error")
+    return {
+        "status": status,
+        "user_id": uid,
+        "rag_corpus": f"projects/{project}/locations/{location}/ragCorpora/{corpus_id}",
+        "files_queued": len(uris),
+        "batches": len(operations),
+        "operations": operations,
+        "errors": errors,
+    }
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 async def run_experience_pipeline(
     user_id: str,
@@ -758,6 +1099,14 @@ async def run_experience_pipeline(
 
     logger.info("[exp] Found %d .py file(s)", len(py_blob_names))
 
+    rag_corpus_sync = await asyncio.to_thread(
+        _sync_python_blobs_to_rag_corpus,
+        uid,
+        bucket,
+        py_blob_names,
+    )
+    logger.info("[rag] corpus sync summary: %s", json.dumps(rag_corpus_sync, default=str)[:4000])
+
     # ── Phase 1: determine which files need new experience assessments ────────
     needs_assessment = [
         name for name in py_blob_names
@@ -794,6 +1143,7 @@ async def run_experience_pipeline(
             "user_id": uid,
             "message": "All files already ingested. Use --force to re-ingest.",
             "py_file_count": len(py_blob_names),
+            "rag_corpus_sync": rag_corpus_sync,
         }
 
     logger.info("[exp] %d file(s) ready for KG ingestion", len(ready_for_kg))
@@ -827,6 +1177,7 @@ async def run_experience_pipeline(
             "status": "error",
             "user_id": uid,
             "message": "No assessment documents could be built.",
+            "rag_corpus_sync": rag_corpus_sync,
         }
 
     # ── Build the two LLM transformers (separate from tools2 singletons) ──────
@@ -942,6 +1293,7 @@ async def run_experience_pipeline(
             "max_source_chars": src_chars,
         },
         "marked_ingested": both_ok and not force,
+        "rag_corpus_sync": rag_corpus_sync,
     }
     logger.info("[exp] DONE: %s", json.dumps(report, indent=2))
     return report

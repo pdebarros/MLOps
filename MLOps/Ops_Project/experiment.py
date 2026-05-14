@@ -125,7 +125,7 @@ async def _final_text_from_events(events_source) -> str | None:
 
 
 async def run_eval_agent_session(user_id: str, neo4j_database: str) -> str:
-    """Single ADK session: full eval workflow including save_scores_to_gcs."""
+    """ADK eval session with one retry on silent final response."""
     from google.adk.runners import Runner
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
     from google.genai import types
@@ -138,7 +138,6 @@ async def run_eval_agent_session(user_id: str, neo4j_database: str) -> str:
         session_service=InMemorySessionService(),
         auto_create_session=True,
     )
-    session_id = f"exp-{uuid.uuid4().hex}"
     adk_user = f"experiment-{user_id}"
     prompt = (
         f"My user_id is `{user_id}` (for GCS scoring paths). "
@@ -155,14 +154,25 @@ async def run_eval_agent_session(user_id: str, neo4j_database: str) -> str:
         role="user",
         parts=[types.Part(text=prompt)],
     )
-    text = await _final_text_from_events(
-        runner.run_async(
-            user_id=adk_user,
-            session_id=session_id,
-            new_message=msg,
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        session_id = f"exp-{uuid.uuid4().hex}"
+        text = await _final_text_from_events(
+            runner.run_async(
+                user_id=adk_user,
+                session_id=session_id,
+                new_message=msg,
+            )
         )
-    )
-    return text or ""
+        if text and text.strip():
+            return text
+        if attempt < max_attempts:
+            logger.warning(
+                "Eval agent returned silent response; retrying (attempt %d/%d)",
+                attempt + 1,
+                max_attempts,
+            )
+    return ""
 
 
 def _safe_mlflow_metric_suffix(raw: str, *, max_len: int = 96) -> str:

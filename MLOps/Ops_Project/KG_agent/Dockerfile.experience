@@ -1,0 +1,45 @@
+# Cloud Run Job image: experience_pipeline.py + Vertex RAG import (gcloud + curl).
+# Build from Ops_Project/KG_agent/:
+#   docker build -f Dockerfile.experience -t gcr.io/PROJECT/kg-experience-job .
+#
+# Deploy a Cloud Run Job with this image. The upload API passes container args only,
+# e.g. --user-id <USER_ID> (and optional --neo4j-database), which append to:
+#   python experience_pipeline.py
+# Point gitai-upload-api at the job: set CLOUD_RUN_KG_JOB_NAME or leave it empty and
+# set CLOUD_RUN_EXPERIENCE_KG_JOB_NAME to this job's name.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir --upgrade pip
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends google-cloud-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY kg_requirements.txt .
+RUN pip install --no-cache-dir -r kg_requirements.txt
+
+COPY prod_pipeline.py .
+COPY experience_pipeline.py .
+COPY pipeline2.py .
+COPY tools2.py .
+COPY config.py .
+COPY __init__.py .
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+# Prefer Vertex doc curl pattern; set to 0 to use urllib + ADC only.
+ENV RAG_USE_GCLOUD_CURL=1
+
+ENTRYPOINT ["python", "experience_pipeline.py"]

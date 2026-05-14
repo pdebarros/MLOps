@@ -352,9 +352,21 @@ def _kg_pipeline_python() -> str:
 
 # ── Cloud Run Jobs helpers ────────────────────────────────────────────────────
 
+def _cloud_run_kg_job_resource_name() -> str:
+    """Which Cloud Run Job to execute: prod KG job, or experience job if prod is unset."""
+    name = settings.cloud_run_kg_job_name or settings.cloud_run_experience_kg_job_name
+    if not name:
+        raise RuntimeError("No Cloud Run KG job name configured")
+    return (
+        f"projects/{settings.cloud_run_project}"
+        f"/locations/{settings.cloud_run_region}"
+        f"/jobs/{name}"
+    )
+
+
 def _trigger_cloud_run_job(user_id: str) -> str:
     """
-    Create a Cloud Run Job execution for prod_pipeline.py.
+    Create a Cloud Run Job execution for the configured KG / experience pipeline job.
 
     Returns the Cloud Run execution resource name which serves as the
     stable, instance-restart-safe job ID for status polling.
@@ -362,11 +374,7 @@ def _trigger_cloud_run_job(user_id: str) -> str:
     from google.cloud import run_v2  # noqa: PLC0415 – lazy import, only on Cloud Run
 
     client = run_v2.JobsClient()
-    job_resource = (
-        f"projects/{settings.cloud_run_project}"
-        f"/locations/{settings.cloud_run_region}"
-        f"/jobs/{settings.cloud_run_kg_job_name}"
-    )
+    job_resource = _cloud_run_kg_job_resource_name()
 
     # Pass --user-id as CMD args; static secrets/config live in the Job definition.
     args_override = ["--user-id", user_id]
@@ -565,7 +573,7 @@ def _enqueue_kg_job(user_id: str) -> str:
     with _kg_jobs_lock:
         _kg_jobs[job_id] = job
 
-    if settings.cloud_run_kg_job_name:
+    if settings.cloud_run_kg_job_name or settings.cloud_run_experience_kg_job_name:
         # ── Cloud Run Jobs mode ──────────────────────────────────────────
         # Durable: execution status survives Cloud Run instance restarts.
         try:

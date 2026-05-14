@@ -55,46 +55,46 @@ def _log_adapter(task_id: str) -> logging.LoggerAdapter:
     return logging.LoggerAdapter(logger, {"task_id": task_id})
 
 
-def normalize_user_id(user_id: str) -> str:
+def normalize_user_id(user_id: str) -> str: #used
     uid = user_id.strip().strip("/")
     if not uid:
         raise ValueError("user_id must be non-empty")
     return uid
 
 
-def code_prefix_for_user(user_id: str) -> str:
+def code_prefix_for_user(user_id: str) -> str: #used
     """Prefix for all blobs belonging to this user (e.g. u_123/)."""
     return f"{normalize_user_id(user_id)}/"
 
 
-def summary_blob_path(code_prefix: str, code_blob_name: str) -> str:
-    """
-    Map gs://bucket/u_123/foo/bar.py -> gs://bucket/u_123/summaries/foo/bar.py.json
-    """
-    if not code_blob_name.startswith(code_prefix):
-        raise ValueError(f"code blob {code_blob_name!r} must start with {code_prefix!r}")
-    rel = code_blob_name[len(code_prefix) :]
-    return f"{code_prefix}{SUMMARIES_SEGMENT}/{rel}.json"
+# def summary_blob_path(code_prefix: str, code_blob_name: str) -> str:
+#     """
+#     Map gs://bucket/u_123/foo/bar.py -> gs://bucket/u_123/summaries/foo/bar.py.json
+#     """
+#     if not code_blob_name.startswith(code_prefix):
+#         raise ValueError(f"code blob {code_blob_name!r} must start with {code_prefix!r}")
+#     rel = code_blob_name[len(code_prefix) :]
+#     return f"{code_prefix}{SUMMARIES_SEGMENT}/{rel}.json"
 
 
-def list_python_blob_names(bucket: storage.Bucket, code_prefix: str) -> list[str]:
-    """List .py object names under code_prefix, excluding the summaries/ tree."""
-    out: list[str] = []
-    summaries_guard = f"{code_prefix}{SUMMARIES_SEGMENT}/"
-    for blob in bucket.list_blobs(prefix=code_prefix):
-        name = blob.name
-        if name.startswith(summaries_guard):
-            continue
-        if name.endswith(".py"):
-            out.append(name)
-    return sorted(out)
+# def list_python_blob_names(bucket: storage.Bucket, code_prefix: str) -> list[str]:
+#     """List .py object names under code_prefix, excluding the summaries/ tree."""
+#     out: list[str] = []
+#     summaries_guard = f"{code_prefix}{SUMMARIES_SEGMENT}/"
+#     for blob in bucket.list_blobs(prefix=code_prefix):
+#         name = blob.name
+#         if name.startswith(summaries_guard):
+#             continue
+#         if name.endswith(".py"):
+#             out.append(name)
+#     return sorted(out)
 
 
-def summary_json_exists(bucket: storage.Bucket, summary_path: str) -> bool:
+def summary_json_exists(bucket: storage.Bucket, summary_path: str) -> bool: #used
     return bucket.blob(summary_path).exists()
 
 
-def load_summary_record(bucket: storage.Bucket, summary_path: str) -> dict[str, Any] | None:
+def load_summary_record(bucket: storage.Bucket, summary_path: str) -> dict[str, Any] | None: #used
     try:
         b = bucket.blob(summary_path)
         if not b.exists():
@@ -107,7 +107,7 @@ def load_summary_record(bucket: storage.Bucket, summary_path: str) -> dict[str, 
 
 def upload_summary_record(
     bucket: storage.Bucket, summary_path: str, record: dict[str, Any]
-) -> None:
+) -> None: #used
     body = json.dumps(record, ensure_ascii=False, indent=2)
     blob = bucket.blob(summary_path)
     blob.upload_from_string(body, content_type="application/json; charset=utf-8")
@@ -115,7 +115,7 @@ def upload_summary_record(
 
 def load_code_files_for_names(
     bucket: storage.Bucket, blob_names: list[str]
-) -> list[dict[str, str]]:
+) -> list[dict[str, str]]: #used
     """Download listed blobs as file_name / file_content."""
     file_data_list: list[dict[str, str]] = []
     for name in blob_names:
@@ -129,92 +129,92 @@ def load_code_files_for_names(
     return file_data_list
 
 
-def load_code_files(
-    bucket_name: str,
-    prefix: str | None = None,
-) -> List[dict[str, str]]:
-    """List .py blobs in GCS and return dicts with file_name and file_content."""
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    if not prefix:
-        return []
-    names = list_python_blob_names(bucket, prefix)
-    return load_code_files_for_names(bucket, names)
+# def load_code_files(
+#     bucket_name: str,
+#     prefix: str | None = None,
+# ) -> List[dict[str, str]]:
+#     """List .py blobs in GCS and return dicts with file_name and file_content."""
+#     client = storage.Client()
+#     bucket = client.bucket(bucket_name)
+#     if not prefix:
+#         return []
+#     names = list_python_blob_names(bucket, prefix)
+#     return load_code_files_for_names(bucket, names)
 
 
-def needs_new_summary(bucket: storage.Bucket, code_prefix: str, code_blob_name: str) -> bool:
-    """True if there is no usable completed summary JSON in GCS for this .py file."""
-    sp = summary_blob_path(code_prefix, code_blob_name)
-    if not summary_json_exists(bucket, sp):
-        return True
-    rec = load_summary_record(bucket, sp)
-    if not rec or rec.get("status") != "completed":
-        return True
-    if not rec.get("summary"):
-        return True
-    return False
+# def needs_new_summary(bucket: storage.Bucket, code_prefix: str, code_blob_name: str) -> bool:
+#     """True if there is no usable completed summary JSON in GCS for this .py file."""
+#     sp = summary_blob_path(code_prefix, code_blob_name)
+#     if not summary_json_exists(bucket, sp):
+#         return True
+#     rec = load_summary_record(bucket, sp)
+#     if not rec or rec.get("status") != "completed":
+#         return True
+#     if not rec.get("summary"):
+#         return True
+#     return False
 
 
-def py_files_missing_summaries(
-    bucket: storage.Bucket, code_prefix: str, py_blob_names: list[str]
-) -> list[str]:
-    """Return .py blob names that need summarization (missing or failed cache)."""
-    return [n for n in py_blob_names if needs_new_summary(bucket, code_prefix, n)]
+# def py_files_missing_summaries(
+#     bucket: storage.Bucket, code_prefix: str, py_blob_names: list[str]
+# ) -> list[str]:
+#     """Return .py blob names that need summarization (missing or failed cache)."""
+#     return [n for n in py_blob_names if needs_new_summary(bucket, code_prefix, n)]
 
 
-def load_cached_results_for_kg(
-    bucket: storage.Bucket, code_prefix: str, py_blob_names: list[str]
-) -> list[dict[str, Any]] | None:
-    """
-    Load summary JSON for each path. Returns None if any record is missing or invalid.
-    """
-    results: list[dict[str, Any]] = []
-    for name in py_blob_names:
-        sp = summary_blob_path(code_prefix, name)
-        rec = load_summary_record(bucket, sp)
-        if not rec:
-            return None
-        summary = rec.get("summary")
-        status = rec.get("status", "completed")
-        if status != "completed" or not summary:
-            logger.warning("Cached summary unusable for %s (status=%s)", name, status)
-            return None
-        results.append(
-            {
-                "file": rec.get("file", name),
-                "summary": str(summary),
-                "status": "completed",
-            }
-        )
-    return results
+# def load_cached_results_for_kg(
+#     bucket: storage.Bucket, code_prefix: str, py_blob_names: list[str]
+# ) -> list[dict[str, Any]] | None:
+#     """
+#     Load summary JSON for each path. Returns None if any record is missing or invalid.
+#     """
+#     results: list[dict[str, Any]] = []
+#     for name in py_blob_names:
+#         sp = summary_blob_path(code_prefix, name)
+#         rec = load_summary_record(bucket, sp)
+#         if not rec:
+#             return None
+#         summary = rec.get("summary")
+#         status = rec.get("status", "completed")
+#         if status != "completed" or not summary:
+#             logger.warning("Cached summary unusable for %s (status=%s)", name, status)
+#             return None
+#         results.append(
+#             {
+#                 "file": rec.get("file", name),
+#                 "summary": str(summary),
+#                 "status": "completed",
+#             }
+#         )
+#     return results
 
 
-async def _final_text_from_events(events_source) -> str | None:
-    """Collect the last non-user final response text from a runner stream."""
-    last: str | None = None
-    async for event in events_source:
-        if not event.is_final_response():
-            continue
-        if getattr(event, "author", None) == "user":
-            continue
-        if event.content and event.content.parts:
-            chunk = "\n".join(
-                p.text for p in event.content.parts if getattr(p, "text", None)
-            )
-            if chunk:
-                last = chunk
-    return last
+# async def _final_text_from_events(events_source) -> str | None:
+#     """Collect the last non-user final response text from a runner stream."""
+#     last: str | None = None
+#     async for event in events_source:
+#         if not event.is_final_response():
+#             continue
+#         if getattr(event, "author", None) == "user":
+#             continue
+#         if event.content and event.content.parts:
+#             chunk = "\n".join(
+#                 p.text for p in event.content.parts if getattr(p, "text", None)
+#             )
+#             if chunk:
+#                 last = chunk
+#     return last
 
 
-def _estimate_tokens_approx(text: str | None) -> int:
-    """
-    Lightweight token estimate for cost trending when provider usage is unavailable.
-    Approximation: ~4 chars/token for English/code-like text.
-    """
-    if not text:
-        return 0
-    s = str(text)
-    return max(1, (len(s) + 3) // 4)
+# def _estimate_tokens_approx(text: str | None) -> int:
+#     """
+#     Lightweight token estimate for cost trending when provider usage is unavailable.
+#     Approximation: ~4 chars/token for English/code-like text.
+#     """
+#     if not text:
+#         return 0
+#     s = str(text)
+#     return max(1, (len(s) + 3) // 4)
 
 
 async def summarize_one_file(
@@ -306,7 +306,7 @@ async def run_parallel_summaries(
     summarizer_instruction: str | None = None,
     user_message_prefix: str | None = None,
     summary_focus_suffix: str = "",
-) -> List[dict[str, Any]]:
+) -> List[dict[str, Any]]: #used
     summarizer_agent = Agent(
         name="code_summarizer",
         model=model_name,
@@ -334,130 +334,130 @@ async def run_parallel_summaries(
     return await asyncio.gather(*tasks)
 
 
-def merge_results_for_kg(
-    py_order: list[str],
-    cached_by_file: dict[str, dict[str, Any]],
-    fresh_by_file: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Stable order matching py_order; prefer fresh over cached."""
-    out: list[dict[str, Any]] = []
-    for path in py_order:
-        if path in fresh_by_file:
-            out.append(fresh_by_file[path])
-        elif path in cached_by_file:
-            out.append(cached_by_file[path])
-        else:
-            logger.error("No result for %s during merge", path)
-            out.append({"file": path, "summary": None, "status": "failed"})
-    return out
+# def merge_results_for_kg(
+#     py_order: list[str],
+#     cached_by_file: dict[str, dict[str, Any]],
+#     fresh_by_file: dict[str, dict[str, Any]],
+# ) -> list[dict[str, Any]]:
+#     """Stable order matching py_order; prefer fresh over cached."""
+#     out: list[dict[str, Any]] = []
+#     for path in py_order:
+#         if path in fresh_by_file:
+#             out.append(fresh_by_file[path])
+#         elif path in cached_by_file:
+#             out.append(cached_by_file[path])
+#         else:
+#             logger.error("No result for %s during merge", path)
+#             out.append({"file": path, "summary": None, "status": "failed"})
+#     return out
 
 
-async def run_pipeline(user_id: str) -> dict[str, Any] | None:
-    bucket_name = Config.GCS_BUCKET_NAME
-    code_prefix = code_prefix_for_user(user_id)
-    model_name = Config.GEMINI_MODEL
-    max_parallel = Config.SUMMARY_MAX_PARALLEL
-    adk_user = f"kg-pipeline-{normalize_user_id(user_id)}"
+# async def run_pipeline(user_id: str) -> dict[str, Any] | None:
+#     bucket_name = Config.GCS_BUCKET_NAME
+#     code_prefix = code_prefix_for_user(user_id)
+#     model_name = Config.GEMINI_MODEL
+#     max_parallel = Config.SUMMARY_MAX_PARALLEL
+#     adk_user = f"kg-pipeline-{normalize_user_id(user_id)}"
 
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
+#     client = storage.Client()
+#     bucket = client.bucket(bucket_name)
 
-    logger.info(
-        "User prefix gs://%s/%s (summaries under .../%s/)",
-        bucket_name,
-        code_prefix.rstrip("/"),
-        SUMMARIES_SEGMENT,
-    )
+#     logger.info(
+#         "User prefix gs://%s/%s (summaries under .../%s/)",
+#         bucket_name,
+#         code_prefix.rstrip("/"),
+#         SUMMARIES_SEGMENT,
+#     )
 
-    py_blob_names = list_python_blob_names(bucket, code_prefix)
-    if not py_blob_names:
-        logger.warning("No .py files under gs://%s/%s — exiting.", bucket_name, code_prefix)
-        return {"status": "skipped", "reason": "no_py_files", "user_id": normalize_user_id(user_id)}
+#     py_blob_names = list_python_blob_names(bucket, code_prefix)
+#     if not py_blob_names:
+#         logger.warning("No .py files under gs://%s/%s — exiting.", bucket_name, code_prefix)
+#         return {"status": "skipped", "reason": "no_py_files", "user_id": normalize_user_id(user_id)}
 
-    missing = py_files_missing_summaries(bucket, code_prefix, py_blob_names)
+#     missing = py_files_missing_summaries(bucket, code_prefix, py_blob_names)
 
-    if not missing:
-        logger.info(
-            "All %d .py file(s) already have summaries in GCS — skipping summarization.",
-            len(py_blob_names),
-        )
-        cached = load_cached_results_for_kg(bucket, code_prefix, py_blob_names)
-        if cached is None:
-            logger.error("Could not load cached summaries; aborting KG step.")
-            return {"status": "error", "reason": "cached_summaries_unusable", "user_id": normalize_user_id(user_id)}
-        results = cached
-    else:
-        logger.info(
-            "%d .py file(s) need new summaries (out of %d total).",
-            len(missing),
-            len(py_blob_names),
-        )
-        cached_by_file: dict[str, dict[str, Any]] = {}
-        for name in py_blob_names:
-            if name not in missing:
-                rec = load_summary_record(
-                    bucket, summary_blob_path(code_prefix, name)
-                )
-                if rec and rec.get("status") == "completed" and rec.get("summary"):
-                    cached_by_file[name] = {
-                        "file": rec.get("file", name),
-                        "summary": str(rec["summary"]),
-                        "status": "completed",
-                    }
+#     if not missing:
+#         logger.info(
+#             "All %d .py file(s) already have summaries in GCS — skipping summarization.",
+#             len(py_blob_names),
+#         )
+#         cached = load_cached_results_for_kg(bucket, code_prefix, py_blob_names)
+#         if cached is None:
+#             logger.error("Could not load cached summaries; aborting KG step.")
+#             return {"status": "error", "reason": "cached_summaries_unusable", "user_id": normalize_user_id(user_id)}
+#         results = cached
+#     else:
+#         logger.info(
+#             "%d .py file(s) need new summaries (out of %d total).",
+#             len(missing),
+#             len(py_blob_names),
+#         )
+#         cached_by_file: dict[str, dict[str, Any]] = {}
+#         for name in py_blob_names:
+#             if name not in missing:
+#                 rec = load_summary_record(
+#                     bucket, summary_blob_path(code_prefix, name)
+#                 )
+#                 if rec and rec.get("status") == "completed" and rec.get("summary"):
+#                     cached_by_file[name] = {
+#                         "file": rec.get("file", name),
+#                         "summary": str(rec["summary"]),
+#                         "status": "completed",
+#                     }
 
-        to_generate = load_code_files_for_names(bucket, missing)
-        if len(to_generate) != len(missing):
-            logger.error("Failed to load some code blobs for summarization.")
-            return {"status": "error", "reason": "code_load_failed", "user_id": normalize_user_id(user_id)}
+#         to_generate = load_code_files_for_names(bucket, missing)
+#         if len(to_generate) != len(missing):
+#             logger.error("Failed to load some code blobs for summarization.")
+#             return {"status": "error", "reason": "code_load_failed", "user_id": normalize_user_id(user_id)}
 
-        fresh_list = await run_parallel_summaries(
-            to_generate, model_name, max_parallel, adk_user
-        )
-        fresh_by_file = {r["file"]: r for r in fresh_list}
+#         fresh_list = await run_parallel_summaries(
+#             to_generate, model_name, max_parallel, adk_user
+#         )
+#         fresh_by_file = {r["file"]: r for r in fresh_list}
 
-        for name, res in fresh_by_file.items():
-            sp = summary_blob_path(code_prefix, name)
-            upload_summary_record(
-                bucket,
-                sp,
-                {
-                    "file": name,
-                    "summary": res.get("summary"),
-                    "status": res.get("status"),
-                    "error": res.get("error"),
-                },
-            )
-            logger.info("Wrote summary to gs://%s/%s", bucket_name, sp)
+#         for name, res in fresh_by_file.items():
+#             sp = summary_blob_path(code_prefix, name)
+#             upload_summary_record(
+#                 bucket,
+#                 sp,
+#                 {
+#                     "file": name,
+#                     "summary": res.get("summary"),
+#                     "status": res.get("status"),
+#                     "error": res.get("error"),
+#                 },
+#             )
+#             logger.info("Wrote summary to gs://%s/%s", bucket_name, sp)
 
-        results = merge_results_for_kg(py_blob_names, cached_by_file, fresh_by_file)
+#         results = merge_results_for_kg(py_blob_names, cached_by_file, fresh_by_file)
 
-    logger.info("Building knowledge graph from %d summary record(s)...", len(results))
-    kg_result = build_kg_and_push_to_neo4j(results)
-    logger.info("KG step result: %s", kg_result)
-    return {
-        "status": "completed",
-        "user_id": normalize_user_id(user_id),
-        "py_file_count": len(py_blob_names),
-        "summary_records": len(results),
-        "kg_result": kg_result,
-    }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Summarize Python under gs://<bucket>/<user_id>/ and build a KG. "
-            "Caches per-file summaries under <user_id>/summaries/."
-        )
-    )
-    parser.add_argument(
-        "--user-id",
-        required=True,
-        help='GCS extension folder, e.g. u_123 → gs://codebases-03-26/u_123/',
-    )
-    args = parser.parse_args()
-    asyncio.run(run_pipeline(args.user_id))
+#     logger.info("Building knowledge graph from %d summary record(s)...", len(results))
+#     kg_result = build_kg_and_push_to_neo4j(results)
+#     logger.info("KG step result: %s", kg_result)
+#     return {
+#         "status": "completed",
+#         "user_id": normalize_user_id(user_id),
+#         "py_file_count": len(py_blob_names),
+#         "summary_records": len(results),
+#         "kg_result": kg_result,
+#     }
 
 
-if __name__ == "__main__":
-    main()
+# def main() -> None:
+#     parser = argparse.ArgumentParser(
+#         description=(
+#             "Summarize Python under gs://<bucket>/<user_id>/ and build a KG. "
+#             "Caches per-file summaries under <user_id>/summaries/."
+#         )
+#     )
+#     parser.add_argument(
+#         "--user-id",
+#         required=True,
+#         help='GCS extension folder, e.g. u_123 → gs://codebases-03-26/u_123/',
+#     )
+#     args = parser.parse_args()
+#     asyncio.run(run_pipeline(args.user_id))
+
+
+# if __name__ == "__main__":
+#     main()
