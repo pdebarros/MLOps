@@ -10,7 +10,8 @@ demonstrated programming experience by combining:
         INSTANTIATES, RAISES, USES_ADVANCED, COMBINES, ...)
 
   **(B) Vertex AI RAG Engine corpus** of the user's GCS chunks
-      - same tenant id used for isolation (per-tenant corpus or metadata filter)
+      - same tenant id for isolation (corpus resolved per user, e.g. from BigQuery
+        ``rag_corpus_id``, a per-tenant corpus path template, or a shared corpus + metadata filter)
       - returns verbatim text chunks with source URIs and similarity scores
 
 You judge how each source contributes, weight them deliberately, and synthesize

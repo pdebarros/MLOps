@@ -14,9 +14,10 @@ Prerequisites
 
 Environment / secrets
 ---------------------
-Neo4j, RAG corpus paths, and model settings are read at runtime from environment
-variables (see ``config.py``). Pass ``--env_file`` pointing at ``KG_agent/.env``
-or configure variables on the deployed Agent Engine resource in the console.
+Neo4j, RAG settings (BigQuery ``rag_corpus_id`` lookup and/or corpus path env vars),
+and model settings are read at runtime from environment variables (see ``config.py``).
+Pass ``--env_file`` pointing at ``KG_agent/.env`` or configure variables on the
+deployed Agent Engine resource in the console.
 
 Usage examples
 --------------

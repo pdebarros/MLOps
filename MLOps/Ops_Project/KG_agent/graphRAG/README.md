@@ -59,9 +59,50 @@ Query
 
 ## RAG configuration
 
-Pick **one** of these two modes in your `.env`.
+Pick **one** primary mode in your `.env` (BigQuery lookup takes precedence when
+configured).
 
-### Mode 1 — Per-tenant corpora (recommended)
+### Mode 0 — BigQuery `rag_corpus_id` (recommended with gitai-upload-api)
+
+When users register, the upload API creates an empty Vertex RAG corpus and
+stores the corpus **numeric id** in BigQuery (`users.rag_corpus_id`). The
+GraphRAG agent can resolve the full corpus resource name at query time using
+the same **tenant id** passed into tools (the raw `user_id`).
+
+**Option A — explicit table**
+
+```
+GRAPHRAG_BQ_USERS_TABLE_REF=my-gcp-project.gitai.users
+GOOGLE_CLOUD_PROJECT=my-gcp-project
+VERTEX_LOCATION=us-central1
+```
+
+**Option B — same env names as the upload API**
+
+```
+GRAPHRAG_RESOLVE_RAG_FROM_BQ=1
+BQ_PROJECT_ID=my-gcp-project
+BQ_DATASET=gitai
+BQ_USERS_TABLE=users
+GOOGLE_CLOUD_PROJECT=my-gcp-project
+VERTEX_LOCATION=us-central1
+```
+
+The agent runs:
+
+`SELECT rag_corpus_id FROM ... WHERE user_id = @tenant_id`
+
+then builds:
+
+`projects/<GOOGLE_CLOUD_PROJECT>/locations/<VERTEX_LOCATION>/ragCorpora/<rag_corpus_id>`
+
+If `rag_corpus_id` is already a full `projects/.../ragCorpora/...` resource name,
+it is used as-is.
+
+The Agent Engine (or local) service account needs **BigQuery job user** + read
+access on the users table (e.g. `roles/bigquery.dataViewer` on the dataset).
+
+### Mode 1 — Per-tenant corpora (path template)
 
 Each user has their own RAG corpus. Strict isolation, no metadata filtering.
 
@@ -143,6 +184,9 @@ or override them:
 | `GRAPHRAG_RAG_TOP_K` | 8 | RAG chunks per query. |
 | `GRAPHRAG_RAG_VECTOR_DISTANCE_THRESHOLD` | -1 (off) | RAG distance threshold. |
 | `GRAPHRAG_NEO4J_DATABASE` | _empty_ | Logical DB name (AuraDB: leave empty). |
+| `GRAPHRAG_BQ_USERS_TABLE_REF` | _unset_ | `project.dataset.users` for `rag_corpus_id` lookup. |
+| `GRAPHRAG_RESOLVE_RAG_FROM_BQ` | `false` | With `BQ_*` / `GOOGLE_CLOUD_PROJECT`, compose table FQN. |
+| `BQ_PROJECT_ID` / `BQ_DATASET` / `BQ_USERS_TABLE` | / `gitai` / `users` | Used when `GRAPHRAG_RESOLVE_RAG_FROM_BQ=1`. |
 | `VERTEX_RAG_CORPUS_TEMPLATE` | _unset_ | Per-tenant corpus pattern with `{tenant}`. |
 | `VERTEX_RAG_CORPUS` | _unset_ | Shared corpus (used if template unset). |
 | `VERTEX_RAG_TENANT_METADATA_KEY` | `tenant_id` | Metadata key for shared-corpus filter. |
@@ -151,7 +195,9 @@ or override them:
 
 - **Graph**: every Cypher call carries the `:User_<uid>` label and a
   `tenantId = $uid` filter.
-- **RAG (per-tenant mode)**: the corpus path itself contains the tenant id,
+- **RAG (BigQuery mode)**: corpus id is loaded for that `user_id` only; each
+  user maps to a distinct Vertex corpus resource.
+- **RAG (per-tenant template mode)**: the corpus path itself contains the tenant id,
   so cross-tenant retrieval is structurally impossible.
 - **RAG (shared mode)**: `Filter(metadata_filter='tenant_id="u_123"')` is
   applied at query time.
@@ -161,6 +207,7 @@ or override them:
 The agent uses Application Default Credentials for now. When deployed to
 Vertex AI Agent Engine, attach a service account with:
 - `roles/aiplatform.user` (Vertex AI RAG Engine retrieval)
+- `roles/bigquery.jobUser` plus read on the users dataset when using Mode 0
 - Network access to the Neo4j AuraDB instance
 - Read access to the relevant GCS buckets if any tools later need them
 

@@ -45,6 +45,7 @@ property, and on every RAG query via per-tenant corpus or metadata filter.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -92,6 +93,57 @@ def _sanitize_tenant_label(uid: str) -> str:
 def _normalize_user_id(uid: str) -> str:
     """Match experience_pipeline.normalize_user_id semantics."""
     return (uid or "").strip().lower().replace(" ", "_")
+
+
+@functools.lru_cache(maxsize=512)
+def _bq_rag_corpus_id_for_user(normalized_user_id: str, table_fqn: str) -> str | None:
+    """
+    Read ``rag_corpus_id`` from the gitai users table (same contract as gitai-upload-api).
+
+    ``table_fqn`` must be ``project.dataset.table``. Cached per (user, table).
+    """
+    parts = table_fqn.split(".")
+    if len(parts) != 3:
+        logger.error("BigQuery users table FQN must be project.dataset.table, got: %s", table_fqn)
+        return None
+    bq_project = parts[0]
+    try:
+        from google.cloud import bigquery
+    except ImportError as e:
+        raise RuntimeError(
+            "google-cloud-bigquery is required for BigQuery RAG corpus resolution. "
+            "Add it to your environment (see graphRAG/requirements.txt)."
+        ) from e
+
+    client = bigquery.Client(project=bq_project)
+    sql = f"""
+        SELECT rag_corpus_id
+        FROM `{table_fqn}`
+        WHERE user_id = @user_id
+        LIMIT 1
+    """
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("user_id", "STRING", normalized_user_id),
+        ]
+    )
+    try:
+        rows = list(client.query(sql, job_config=cfg).result())
+    except Exception:
+        logger.exception(
+            "BigQuery rag_corpus_id lookup failed (user_id=%s, table=%s)",
+            normalized_user_id,
+            table_fqn,
+        )
+        raise
+    if not rows:
+        return None
+    row = dict(rows[0])
+    raw = row.get("rag_corpus_id")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
 
 
 def _get_embedder():
@@ -587,12 +639,31 @@ def _resolve_tenant_corpus(tenant_id: str) -> tuple[str, str]:
     """
     Return ``(corpus_resource, mode)`` for the tenant.
 
-    ``mode`` is either ``"per_tenant"`` (each tenant has its own corpus and
-    no metadata filtering is needed) or ``"shared"`` (single corpus with a
-    metadata filter applied at query time).
+    ``mode`` is ``"from_bq"`` (corpus id loaded from BigQuery), ``"per_tenant"``
+    (template path), or ``"shared"`` (single corpus + metadata filter).
 
     Raises ``RuntimeError`` if RAG is not configured.
     """
+    table_fqn = Config.bq_users_table_fqn()
+    if table_fqn:
+        cid = _bq_rag_corpus_id_for_user(tenant_id, table_fqn)
+        if not cid:
+            raise RuntimeError(
+                f"No BigQuery row or empty rag_corpus_id for user_id={tenant_id!r} "
+                f"in `{table_fqn}`. Ensure the user registered and corpus provisioning completed."
+            )
+        if cid.startswith("projects/"):
+            return cid.strip(), "from_bq"
+        proj = (Config.GOOGLE_CLOUD_PROJECT or "").strip()
+        loc = (Config.VERTEX_LOCATION or "us-central1").strip()
+        if not proj:
+            raise RuntimeError(
+                "GOOGLE_CLOUD_PROJECT must be set when building the Vertex RAG corpus path "
+                "from BigQuery rag_corpus_id (numeric id)."
+            )
+        corpus = f"projects/{proj}/locations/{loc}/ragCorpora/{cid.strip()}"
+        return corpus, "from_bq"
+
     tpl = (Config.VERTEX_RAG_CORPUS_TEMPLATE or "").strip()
     if tpl:
         try:
@@ -608,9 +679,9 @@ def _resolve_tenant_corpus(tenant_id: str) -> tuple[str, str]:
         return shared, "shared"
 
     raise RuntimeError(
-        "RAG is not configured. Set VERTEX_RAG_CORPUS_TEMPLATE for per-tenant "
-        "corpora (recommended) or VERTEX_RAG_CORPUS for a shared corpus with "
-        "tenant metadata filtering."
+        "RAG is not configured. Set GRAPHRAG_BQ_USERS_TABLE_REF (or "
+        "GRAPHRAG_RESOLVE_RAG_FROM_BQ=1 with BQ_PROJECT_ID / GOOGLE_CLOUD_PROJECT and "
+        "BQ_DATASET / BQ_USERS_TABLE), VERTEX_RAG_CORPUS_TEMPLATE, or VERTEX_RAG_CORPUS."
     )
 
 
@@ -687,13 +758,13 @@ def rag_corpus_query(
     """
     Retrieve relevant chunks from the user's Vertex AI RAG Engine corpus.
 
-    Uses tenant isolation in one of two modes (auto-selected by config):
-      * **Per-tenant corpus** (preferred): each tenant has their own corpus
-        named via ``VERTEX_RAG_CORPUS_TEMPLATE`` (e.g.
-        ``...ragCorpora/gitai-{tenant}``).
-      * **Shared corpus**: a single corpus named via ``VERTEX_RAG_CORPUS``,
-        with a metadata filter on ``VERTEX_RAG_TENANT_METADATA_KEY`` applied at
-        query time.
+    Uses tenant isolation in one of three modes (auto-selected by config):
+      * **BigQuery**: ``rag_corpus_id`` for ``user_id = tenant_id`` in the users
+        table (see ``GRAPHRAG_BQ_USERS_TABLE_REF`` / ``GRAPHRAG_RESOLVE_RAG_FROM_BQ``).
+      * **Per-tenant corpus template**: each tenant has their own corpus path via
+        ``VERTEX_RAG_CORPUS_TEMPLATE`` (e.g. ``...ragCorpora/gitai-{tenant}``).
+      * **Shared corpus**: a single corpus via ``VERTEX_RAG_CORPUS``, with a
+        metadata filter on ``VERTEX_RAG_TENANT_METADATA_KEY`` at query time.
 
     Authentication: Application Default Credentials for now (gcloud auth
     application-default login). When deployed to Agent Engine the same code
@@ -719,8 +790,9 @@ def rag_corpus_query(
 
     if not Config.is_rag_configured():
         return (
-            "RAG is not configured. Set VERTEX_RAG_CORPUS_TEMPLATE (per-tenant) "
-            "or VERTEX_RAG_CORPUS (shared) in your .env."
+            "RAG is not configured. Set GRAPHRAG_BQ_USERS_TABLE_REF (or "
+            "GRAPHRAG_RESOLVE_RAG_FROM_BQ=1 with BQ_*), VERTEX_RAG_CORPUS_TEMPLATE, "
+            "or VERTEX_RAG_CORPUS in your environment."
         )
 
     k = int(top_k) if top_k is not None else Config.RAG_TOP_K
@@ -747,6 +819,7 @@ def rag_corpus_query(
             # Apply tenant metadata filter so cross-tenant chunks are excluded.
             key = Config.VERTEX_RAG_TENANT_METADATA_KEY or "tenant_id"
             filter_kwargs["metadata_filter"] = f'{key}="{uid}"'
+        # "per_tenant", "from_bq": dedicated corpus per user — no metadata filter.
         if filter_kwargs:
             cfg.filter = rag.Filter(**filter_kwargs)
 
