@@ -1,0 +1,44 @@
+MLOps/Ops_Project/KG_agent/graphRAG/tools.py
+  2f909d4d931a81d3 48,98-148,642-643,647-666,682-684,761-767,793-795,822
+MLOps/Ops_Project/KG_agent/graphRAG/requirements.txt
+  2f909d4d931a81d3 4
+MLOps/Ops_Project/KG_agent/graphRAG/README.md
+  2f909d4d931a81d3 62-63,65-105,187-189,198-200,210
+MLOps/Ops_Project/KG_agent/graphRAG/config.py
+  2f909d4d931a81d3 54-62,94,96-103,106,109-113,121-137,140
+MLOps/Ops_Project/KG_agent/graphRAG/deploy.py
+  2f909d4d931a81d3 17-20
+MLOps/Ops_Project/KG_agent/graphRAG/prompt.py
+  2f909d4d931a81d3 13-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "886a5e240d5d4f676f2683833490ed9f6123cac4",
+  "prompts": {
+    "2f909d4d931a81d3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0074838c-4f72-4409-a9da-4452847507e0",
+        "model": "default"
+      },
+      "human_author": "pdebarros <pdebarros@dons.usfca.edu>",
+      "total_additions": 188,
+      "total_deletions": 31,
+      "accepted_lines": 187,
+      "overriden_lines": 0
+    },
+    "7dd18a31ac474940": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "8ac998b7-a79d-4a92-9c87-fb8adf2ee8eb",
+        "model": "default"
+      },
+      "human_author": "pdebarros <pdebarros@dons.usfca.edu>",
+      "total_additions": 606,
+      "total_deletions": 18,
+      "accepted_lines": 588,
+      "overriden_lines": 0
+    }
+  }
+}
